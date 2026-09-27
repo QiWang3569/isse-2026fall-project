@@ -228,6 +228,9 @@ a {
   width: calc(100% - 224px);
 }
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
   height: 90px;
   display: flex;
   align-items: center;
@@ -547,6 +550,7 @@ main {
   padding: 10px 13px;
 }
 .market-section {
+  scroll-margin-top: 106px;
   margin-top: 30px;
 }
 .section-heading {
@@ -1287,6 +1291,8 @@ footer .brand svg {
   padding: 2px;
 }
 .compare-tray {
+  max-width: min(760px, calc(100vw - 32px));
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   gap: 17px;
@@ -1301,6 +1307,7 @@ footer .brand svg {
   z-index: 40;
 }
 .compare-tray > span {
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2358,4 +2365,48 @@ footer .brand svg {
 }
 .agent-questions li {
   margin: 5px 0;
+}
+
+.compare-selection {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 100%;
+  min-width: 0;
+  order: 1;
+}
+.compare-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 210px;
+  padding: 6px 9px;
+  background: #edf3e7;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.compare-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compare-chip svg {
+  flex-shrink: 0;
+}
+.comparison-grid > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 650px) {
+  .market-section {
+    scroll-margin-top: 88px;
+  }
+  .compare-tray {
+    left: 12px;
+    max-width: none;
+  }
+  .compare-chip {
+    max-width: 100%;
+  }
 }

@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   ArrowDownUp,
   ArrowRight,
@@ -162,8 +168,27 @@ export default function App() {
     [prefill, setPrefill] = useState<Wanted | null>(null);
   const [noticeIntent, setNoticeIntent] = useState<Intent | null>(null);
   const [draft, setDraft] = useState(""),
+    [draftOpen, setDraftOpen] = useState(false),
     [reporting, setReporting] = useState(false),
     [reportText, setReportText] = useState("");
+  const [searchRequest, setSearchRequest] = useState(0);
+  const marketRef = useRef<HTMLElement>(null);
+  const draftRef = useRef<HTMLTextAreaElement>(null);
+  const reportRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!searchRequest || view !== "market") return;
+    marketRef.current?.scrollIntoView({ block: "start" });
+    marketRef.current?.focus({ preventScroll: true });
+  }, [searchRequest, view]);
+  useEffect(() => {
+    const target = reporting
+      ? reportRef.current
+      : draftOpen
+        ? draftRef.current
+        : null;
+    target?.scrollIntoView({ block: "center" });
+    target?.focus({ preventScroll: true });
+  }, [reporting, draftOpen]);
   const refresh = useCallback(() => setRevision((v) => v + 1), []);
   useEffect(() => {
     const listener = () => {
@@ -254,6 +279,7 @@ export default function App() {
   }
   async function openItem(item: Item) {
     setDraft("");
+    setDraftOpen(false);
     setReporting(false);
     setReportText("");
     try {
@@ -284,6 +310,10 @@ export default function App() {
     else if (compare.length < 3) setCompare([...compare, item]);
     else setToast("每次最多对比 3 件商品");
   }
+  function removeCompare(id: string) {
+    setCompare((current) => current.filter((item) => item.id !== id));
+    if (modal === "compare" && compare.length <= 2) setModal(null);
+  }
   async function copy(text: string, message: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -297,6 +327,7 @@ export default function App() {
     setQuery(search);
     setPage(1);
     navigate("market");
+    setSearchRequest((value) => value + 1);
   }
   const listParams = new URLSearchParams({
     q: query,
@@ -599,7 +630,12 @@ export default function App() {
             </>
           )}
           {listingView && (
-            <section className="market-section">
+            <section
+              className="market-section"
+              ref={marketRef}
+              tabIndex={-1}
+              aria-label="商品搜索结果"
+            >
               {view === "market" ? (
                 <div className="section-heading">
                   <div>
@@ -1107,6 +1143,19 @@ export default function App() {
             <CheckCheck size={18} />
             已选 {compare.length} 件好物
           </span>
+          <div className="compare-selection">
+            {compare.map((item) => (
+              <button
+                key={item.id}
+                className="compare-chip"
+                onClick={() => removeCompare(item.id)}
+                aria-label={`移除对比：${item.title}`}
+              >
+                <span>{item.title}</span>
+                <X size={14} />
+              </button>
+            ))}
+          </div>
           <button
             className="button primary"
             disabled={compare.length < 2}
@@ -1369,6 +1418,14 @@ export default function App() {
           >
             {compare.map((i) => (
               <div key={i.id}>
+                <button
+                  className="text-button"
+                  onClick={() => removeCompare(i.id)}
+                  aria-label={`移除对比：${i.title}`}
+                >
+                  <X size={14} />
+                  移除
+                </button>
                 <ProductArt item={i} />
                 <h3>{i.title}</h3>
                 <p className="price">¥{money(i.price)}</p>
@@ -1531,6 +1588,8 @@ export default function App() {
                             "POST",
                           );
                           setDraft(d.draft);
+                          setDraftOpen(true);
+                          setReporting(false);
                         });
                     }}
                   >
@@ -1563,7 +1622,10 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => {
-                    if (needUser()) setReporting(!reporting);
+                    if (needUser()) {
+                      setReporting(!reporting);
+                      setDraftOpen(false);
+                    }
                   }}
                 >
                   <Flag size={14} />
@@ -1572,12 +1634,13 @@ export default function App() {
               </div>
             </div>
           </div>
-          {draft && (
+          {draft && draftOpen && (
             <div className="draft-box">
               <h3>
                 咨询草稿 <span>尚未发送</span>
               </h3>
               <textarea
+                ref={draftRef}
                 aria-label="咨询消息草稿"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -1585,6 +1648,12 @@ export default function App() {
               />
               <div>
                 <p>由你确认并复制发送。演示版未接入站内聊天或微信。</p>
+                <button
+                  className="text-button"
+                  onClick={() => setDraftOpen(false)}
+                >
+                  关闭草稿
+                </button>
                 <button
                   className="button secondary"
                   onClick={() => void copy(draft, "咨询草稿已复制，尚未发送")}
@@ -1611,6 +1680,7 @@ export default function App() {
               <label>
                 请描述遇到的问题
                 <textarea
+                  ref={reportRef}
                   value={reportText}
                   onChange={(e) => setReportText(e.target.value)}
                   required
@@ -1621,6 +1691,13 @@ export default function App() {
               </label>
               <button className="button secondary" disabled={busy}>
                 提交举报
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setReporting(false)}
+              >
+                取消举报
               </button>
             </form>
           )}
