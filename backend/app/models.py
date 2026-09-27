@@ -64,6 +64,8 @@ class Intent(Base):
     max_price_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     campus: Mapped[str] = mapped_column(String(30), default='不限校区')
     keywords: Mapped[list] = mapped_column(JSON, default=list)
+    excluded_keywords: Mapped[list] = mapped_column(JSON, default=list)
+    preferences: Mapped[list] = mapped_column(JSON, default=list)
     condition_grade: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default='ACTIVE')
     embedding: Mapped[list | None] = mapped_column(JSON().with_variant(Vector(1536), 'postgresql'), nullable=True)
@@ -81,9 +83,27 @@ class Notification(Base):
     item_id: Mapped[str] = mapped_column(ForeignKey('items.id'))
     score: Mapped[float] = mapped_column(Float)
     reason: Mapped[str] = mapped_column(Text)
+    verdict: Mapped[str] = mapped_column(String(20), default='MATCH')
+    questions: Mapped[list] = mapped_column(JSON, default=list)
+    evidence: Mapped[list] = mapped_column(JSON, default=list)
+    review_mode: Mapped[str] = mapped_column(String(20), default='local')
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     __table_args__ = (UniqueConstraint('intent_id', 'item_id'),)
+
+
+class MatchJob(Base):
+    __tablename__ = 'match_jobs'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    kind: Mapped[str] = mapped_column(String(20))
+    target_id: Mapped[str] = mapped_column(String(36))
+    item_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default='PENDING')
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    error_code: Mapped[str] = mapped_column(String(40), default='')
+    __table_args__ = (Index('idx_match_jobs_pending', 'status', 'available_at'),)
 
 
 class Favorite(Base):

@@ -16,9 +16,11 @@ from sqlalchemy import create_engine, event, func, or_, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import ROOT, Settings
-from .models import ActionLog, Base, Favorite, Intent, Item, LoginSession, Notification, Report, Upload, User, Wanted, now, uid
+from .matching import MatchingRunner
+from .migrations import upgrade_buyer_agent
+from .models import ActionLog, Base, Favorite, Intent, Item, LoginSession, MatchJob, Notification, Report, Upload, User, Wanted, now, uid
 from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, DemoLogin, IntentChange, IntentCreate, ItemCreate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate
-from .services import FEATURES, assess_report, embed, log, match_intent, match_item, model_name, normalize, parse_intent, seed
+from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, seed
 
 
 def iso(value):
@@ -38,6 +40,7 @@ def create_app(settings: Settings | None = None):
             connection.execute('PRAGMA journal_mode=WAL')
     factory = sessionmaker(engine, expire_on_commit=False)
     mutation_lock = threading.RLock()
+    matching = MatchingRunner(factory, settings, mutation_lock)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -45,19 +48,26 @@ def create_app(settings: Settings | None = None):
             with engine.begin() as conn:
                 conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
         Base.metadata.create_all(engine)
+        upgrade_buyer_agent(engine)
         if engine.dialect.name == 'postgresql':
             with engine.begin() as conn:
                 conn.execute(text('CREATE INDEX IF NOT EXISTS idx_items_embedding_hnsw ON items USING hnsw (embedding vector_cosine_ops)'))
         if settings.demo_mode:
             with factory() as db:
                 seed(db)
-        yield
-        engine.dispose()
+        matching.start()
+        try:
+            yield
+        finally:
+            matching.stop()
+            engine.dispose()
 
     app = FastAPI(title='燕渡 API', version='0.1.0', lifespan=lifespan)
     app.state.engine = engine
     app.state.session_factory = factory
     app.state.settings = settings
+    app.state.matching = matching
+    app.state.mutation_lock = mutation_lock
     app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=True, allow_methods=['GET', 'POST', 'PATCH', 'DELETE'], allow_headers=['Content-Type'])
 
     @app.middleware('http')
@@ -114,10 +124,15 @@ def create_app(settings: Settings | None = None):
                 'is_owner': bool(user and user.id == item.seller_id), 'is_demo': item.id.startswith('sample-')}
 
     def intent_out(intent, db):
-        count = db.scalar(select(func.count()).select_from(Notification).where(Notification.intent_id == intent.id))
+        count = db.scalar(select(func.count()).select_from(Notification).where(Notification.intent_id == intent.id, Notification.verdict != 'NO_MATCH'))
+        job = db.scalar(select(MatchJob).where(MatchJob.target_id == intent.id).order_by(MatchJob.created_at.desc()).limit(1))
+        outstanding = db.scalar(select(MatchJob).where(MatchJob.target_id == intent.id, MatchJob.status.in_(['PENDING', 'RUNNING', 'FAILED'])).order_by(MatchJob.created_at.desc()).limit(1))
+        state = (outstanding or job).status if outstanding or job else 'DONE'
         return {'id': intent.id, 'raw_query': intent.raw_query, 'category': intent.category,
                 'max_price': intent.max_price_cents / 100 if intent.max_price_cents is not None else None,
                 'campus': intent.campus, 'keywords': intent.keywords, 'condition_grade': intent.condition_grade,
+                'excluded_keywords': intent.excluded_keywords, 'preferences': intent.preferences, 'clarification': None,
+                'matching_state': state,
                 'status': intent.status, 'match_count': count, 'created_at': iso(intent.created_at),
                 'expires_at': iso(intent.expires_at), 'matching_mode': intent.embedding_model}
 
@@ -143,7 +158,7 @@ def create_app(settings: Settings | None = None):
     @app.get('/api/v1/meta')
     def meta(db: Session = Depends(get_db)):
         return {'categories': CATEGORIES, 'campuses': CAMPUSES, 'conditions': CONDITIONS,
-                'demo_mode': settings.demo_mode, 'ai_mode': settings.ai_mode,
+                'demo_mode': settings.demo_mode, 'ai_mode': settings.ai_mode, 'embedding_mode': settings.embedding_mode,
                 'active_items': db.scalar(select(func.count()).select_from(Item).where(Item.status == 'ACTIVE', Item.expires_at > now()))}
 
     @app.get('/api/v1/auth/me')
@@ -255,29 +270,38 @@ def create_app(settings: Settings | None = None):
             if not image or image.user_id != user.id:
                 raise HTTPException(422, '只能使用自己上传的商品图片')
         values = data.model_dump(exclude={'price'})
+        db.commit()  # Release the read transaction before contacting a provider.
         vector = embed(data.title + ' ' + data.description + ' ' + ' '.join(data.tags), settings)
         item = Item(**values, seller_id=user.id, price_cents=int(data.price*100), embedding=vector, embedding_model=model_name(settings))
         with mutation_lock:
             db.add(item)
             db.flush()
-            match_item(db, item, settings)
+            jobs = matching.enqueue_item(db, item)
             log(db, user, 'item.publish', item.id)
             db.commit()
+        for job_id in jobs:
+            matching.run_or_wake(job_id)
         return item_out(item, db, user)
 
     @app.patch('/api/v1/items/{item_id}/status')
     def item_status(item_id: str, data: StatusChange, db: Session = Depends(get_db), user=Depends(require_user)):
-        item = get_item(db, item_id)
-        if item.seller_id != user.id:
-            raise HTTPException(403, '只能修改自己发布的商品')
-        if item.status in {'BANNED', 'SOLD'}:
-            raise HTTPException(409, '已售出或审核隐藏的商品不能由卖家重新上架')
-        item.status = data.status
-        if data.status == 'ACTIVE':
-            item.expires_at = now()+timedelta(days=14)
-            match_item(db, item, settings)
-        log(db, user, 'item.status', item.id, data.status)
-        db.commit()
+        with mutation_lock:
+            item = db.scalar(select(Item).where(Item.id == item_id).with_for_update().execution_options(populate_existing=True))
+            if not item:
+                raise HTTPException(404, '商品不存在')
+            if item.seller_id != user.id:
+                raise HTTPException(403, '只能修改自己发布的商品')
+            if item.status in {'BANNED', 'SOLD'}:
+                raise HTTPException(409, '已售出或审核隐藏的商品不能由卖家重新上架')
+            item.status = data.status
+            if data.status == 'ACTIVE':
+                item.expires_at = now()+timedelta(days=14)
+            db.flush()
+            jobs = matching.enqueue_item(db, item) if data.status == 'ACTIVE' else []
+            log(db, user, 'item.status', item.id, data.status)
+            db.commit()
+        for job_id in jobs:
+            matching.run_or_wake(job_id)
         return item_out(item, db, user)
 
     @app.post('/api/v1/items/{item_id}/favorite')
@@ -300,31 +324,39 @@ def create_app(settings: Settings | None = None):
         item = get_item(db, item_id)
         if item.status != 'ACTIVE' or item.expires_at <= now():
             raise HTTPException(409, '该商品当前不在售，请查看其他商品')
+        notice = db.scalar(select(Notification).where(Notification.item_id == item.id, Notification.buyer_id == user.id).order_by(Notification.created_at.desc()).limit(1))
+        questions = notice.questions if notice else []
+        extra = ('另外想确认：' + '；'.join(questions)) if questions else ''
         log(db, user, 'message.draft', item.id)
         db.commit()
-        return {'draft': f'你好，请问「{item.title}」还在吗？我在{user.campus}，希望确认一下商品状况和方便的当面交易时间。谢谢！', 'sent': False}
+        return {'draft': f'你好，请问「{item.title}」还在吗？我在{user.campus}，希望确认一下商品状况和方便的当面交易时间。{extra}谢谢！', 'sent': False}
 
     @app.post('/api/v1/intents/parse')
-    def parse(data: QueryIn, user=Depends(require_user)):
+    def parse(data: QueryIn, db: Session = Depends(get_db), user=Depends(require_user)):
+        db.commit()
         return {'parsed': parse_intent(data.raw_query, settings), 'mode': settings.ai_mode}
 
     @app.post('/api/v1/intents/', status_code=201)
     def add_intent(data: IntentCreate, db: Session = Depends(get_db), user=Depends(require_user)):
         if not data.parsed.keywords:
             raise HTTPException(422, '请至少填写一个具体的物品关键词')
+        db.commit()
         vector = embed(' '.join(data.parsed.keywords), settings)
         parsed = data.parsed
         intent = Intent(buyer_id=user.id, raw_query=data.raw_query, category=parsed.category,
                         max_price_cents=int(parsed.max_price*100) if parsed.max_price is not None else None,
                         campus=parsed.campus, keywords=parsed.keywords, condition_grade=parsed.condition_grade,
+                        excluded_keywords=parsed.excluded_keywords, preferences=parsed.preferences,
                         embedding=vector, embedding_model=model_name(settings))
         with mutation_lock:
             check_intent_limit(db, user)
             db.add(intent)
             db.flush()
-            matches = match_intent(db, intent, settings)
+            job_id = matching.enqueue(db, 'intent', intent.id)
             log(db, user, 'intent.create', intent.id)
             db.commit()
+        matching.run_or_wake(job_id)
+        matches = db.scalars(select(Item).join(Notification, Notification.item_id == Item.id).where(Notification.intent_id == intent.id, Notification.verdict != 'NO_MATCH')).all()
         return {'intent': intent_out(intent, db), 'matches': [item_out(i, db, user) for i in matches]}
 
     @app.get('/api/v1/intents/my')
@@ -346,24 +378,47 @@ def create_app(settings: Settings | None = None):
                 elif intent.expires_at <= now():
                     raise HTTPException(409, '任务已过期，请先续期')
                 intent.status = 'ACTIVE'
-                match_intent(db, intent, settings)
+                job_id = matching.enqueue(db, 'intent', intent.id)
             log(db, user, 'intent.'+data.action, intent.id)
             db.commit()
+        if data.action != 'pause':
+            matching.run_or_wake(job_id)
+        return intent_out(intent, db)
+
+    @app.post('/api/v1/intents/{intent_id}/retry')
+    def retry_matching(intent_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            intent = owned_intent(db, intent_id, user)
+            if intent.status != 'ACTIVE' or intent.expires_at <= now():
+                raise HTTPException(409, '请先恢复或续期代蹲任务')
+            failed = db.scalars(select(MatchJob).where(MatchJob.target_id == intent_id, MatchJob.status == 'FAILED')).all()
+            if not failed:
+                raise HTTPException(409, '没有需要重试的失败匹配任务')
+            for job in failed:
+                job.status, job.attempts, job.error_code, job.available_at = 'PENDING', 0, '', now()
+            job_ids = [j.id for j in failed]
+            log(db, user, 'intent.retry', intent_id)
+            db.commit()
+        for job_id in job_ids:
+            matching.run_or_wake(job_id)
         return intent_out(intent, db)
 
     @app.delete('/api/v1/intents/{intent_id}')
     def end_intent(intent_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
-        intent = owned_intent(db, intent_id, user)
-        intent.status = 'COMPLETED'
-        log(db, user, 'intent.complete', intent.id)
-        db.commit()
+        with mutation_lock:
+            intent = owned_intent(db, intent_id, user)
+            intent.status = 'COMPLETED'
+            log(db, user, 'intent.complete', intent.id)
+            db.commit()
         return {'ok': True}
 
     @app.get('/api/v1/notifications/')
     def notifications(db: Session = Depends(get_db), user=Depends(require_user)):
-        rows = db.scalars(select(Notification).where(Notification.buyer_id == user.id).order_by(Notification.created_at.desc()).limit(100))
+        query = select(Notification).where(Notification.buyer_id == user.id, Notification.verdict != 'NO_MATCH')
+        rows = db.scalars(query.order_by(Notification.created_at.desc()).limit(100))
         return [{'id': n.id, 'intent_id': n.intent_id, 'item': item_out(db.get(Item, n.item_id), db, user),
-                 'score': n.score, 'reason': n.reason, 'is_read': n.is_read, 'created_at': iso(n.created_at),
+                 'score': n.score, 'reason': n.reason, 'verdict': n.verdict, 'questions': n.questions,
+                 'evidence': n.evidence, 'review_mode': n.review_mode, 'score_kind': 'embedding_similarity' if db.get(Intent, n.intent_id).embedding_model != 'local-keyword' else 'keyword_coverage', 'is_read': n.is_read, 'created_at': iso(n.created_at),
                  'available': db.get(Item, n.item_id).status == 'ACTIVE' and db.get(Item, n.item_id).expires_at > now()} for n in rows]
 
     @app.patch('/api/v1/notifications/{notification_id}/read')
@@ -421,21 +476,26 @@ def create_app(settings: Settings | None = None):
 
     @app.post('/api/v1/admin/reports/{report_id}/review')
     def review(report_id: str, data: ReviewAction, db: Session = Depends(get_db), user=Depends(require_admin)):
-        report = db.get(Report, report_id)
-        if not report:
-            raise HTTPException(404, '举报不存在')
-        item = get_item(db, report.item_id)
-        if data.action == 'hide':
-            if item.status == 'SOLD':
-                raise HTTPException(409, '已售商品不能隐藏后重新上架')
-            item.status = 'BANNED'
-        elif data.action == 'restore':
-            if item.status != 'BANNED':
-                raise HTTPException(409, '仅可恢复审核隐藏的商品')
-            item.status = 'ACTIVE' if item.expires_at > now() else 'EXPIRED'
-        report.status = {'hide': 'HIDDEN', 'restore': 'RESTORED', 'dismiss': 'DISMISSED'}[data.action]
-        log(db, user, 'admin.'+data.action, item.id, data.note)
-        db.commit()
+        with mutation_lock:
+            report = db.get(Report, report_id)
+            if not report:
+                raise HTTPException(404, '举报不存在')
+            item = db.scalar(select(Item).where(Item.id == report.item_id).with_for_update().execution_options(populate_existing=True))
+            if data.action == 'hide':
+                if item.status == 'SOLD':
+                    raise HTTPException(409, '已售商品不能隐藏后重新上架')
+                item.status = 'BANNED'
+            elif data.action == 'restore':
+                if item.status != 'BANNED':
+                    raise HTTPException(409, '仅可恢复审核隐藏的商品')
+                item.status = 'ACTIVE' if item.expires_at > now() else 'EXPIRED'
+            report.status = {'hide': 'HIDDEN', 'restore': 'RESTORED', 'dismiss': 'DISMISSED'}[data.action]
+            log(db, user, 'admin.'+data.action, item.id, data.note)
+            db.flush()
+            jobs = matching.enqueue_item(db, item) if data.action == 'restore' and item.status == 'ACTIVE' else []
+            db.commit()
+        for job_id in jobs:
+            matching.run_or_wake(job_id)
         return {'ok': True}
 
     @app.get('/api/v1/admin/logs')

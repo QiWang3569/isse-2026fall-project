@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 CATEGORIES = ['课程资料与书籍', '数码与影音', '校园出行与运动', '宿舍生活与家电', '美妆服饰与周边']
 CAMPUSES = ['燕园校本部', '万柳学区', '医学部', '昌平新校区', '不限校区']
@@ -60,12 +60,22 @@ class ParsedIntent(StrictModel):
     max_price: Decimal | None = Field(default=None, ge=0, le=999999, decimal_places=2)
     campus: str = '不限校区'
     keywords: list[str] = Field(default_factory=list, max_length=12)
+    excluded_keywords: list[str] = Field(default_factory=list, max_length=12)
+    preferences: list[str] = Field(default_factory=list, max_length=12)
     condition_grade: str | None = None
-    clarification: str | None = None
+    clarification: str | None = Field(default=None, max_length=500)
     category_valid = field_validator('category')(classmethod(lambda cls, v: ItemCreate.category_valid(v) if v is not None else None))
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
     condition_valid = field_validator('condition_grade')(classmethod(lambda cls, v: ItemCreate.condition_valid(v) if v else None))
     tags_valid = field_validator('keywords')(classmethod(lambda cls, v: ItemCreate.tags_valid(v)))
+    exclusions_valid = field_validator('excluded_keywords')(classmethod(lambda cls, v: ItemCreate.tags_valid(v)))
+    preferences_valid = field_validator('preferences')(classmethod(lambda cls, v: ItemCreate.tags_valid(v)))
+
+    @model_validator(mode='after')
+    def consistent_conditions(self):
+        if set(self.excluded_keywords) & (set(self.keywords) | set(self.preferences)):
+            raise ValueError('同一特征不能同时要求与排除，请调整条件')
+        return self
 
 
 class IntentCreate(QueryIn):

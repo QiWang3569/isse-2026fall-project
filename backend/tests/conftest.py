@@ -11,6 +11,16 @@ from app.config import Settings
 from app.main import create_app
 
 
+@pytest.fixture(autouse=True)
+def isolate_local_environment(monkeypatch):
+    # Tests must not inherit credentials or provider settings from a developer's .env.
+    for name in ('AI_MODE', 'EMBEDDING_MODE', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_MODEL',
+                 'EMBEDDING_API_KEY', 'EMBEDDING_BASE_URL', 'EMBEDDING_MODEL', 'MODEL_THINKING',
+                 'MODEL_TIMEOUT_SECONDS', 'MATCH_MAX_ATTEMPTS', 'MATCH_THRESHOLD', 'DATABASE_URL',
+                 'DEMO_MODE', 'ALLOWED_ORIGINS'):
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def app(tmp_path):
     return create_app(Settings(database_url=f'sqlite:///{tmp_path / "test.db"}', data_dir=tmp_path, demo_mode=True, ai_mode='local'))
