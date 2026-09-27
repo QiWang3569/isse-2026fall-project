@@ -100,6 +100,17 @@ def test_model_thinking_can_be_configured_without_changing_json_protocol(tmp_pat
     assert buyer_agent.chat_json('返回 JSON', '网球拍', remote_settings(tmp_path, model_thinking='disabled')) == {'item': '网球拍'}
 
 
+def test_notifications_are_scoped_to_owned_wish(client):
+    login(client)
+    mouse = intent(client).json()['intent']
+    tennis = intent(client, '燕园本部二手网球拍').json()['intent']
+    assert client.get('/api/v1/notifications/').json()
+    assert client.get('/api/v1/notifications/', params={'intent_id': tennis['id']}).json() == []
+    scoped = client.get('/api/v1/notifications/', params={'intent_id': mouse['id']}).json()
+    assert scoped and all(n['intent_id'] == mouse['id'] for n in scoped)
+    login(client, 'seller')
+    assert client.get('/api/v1/notifications/', params={'intent_id': mouse['id']}).status_code == 404
+
 
 def test_preferences_do_not_filter_and_exclusions_are_not_positive_requirements(client):
     login(client)

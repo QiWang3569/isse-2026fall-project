@@ -12,6 +12,8 @@ export function IntentForm({
   const [query, setQuery] = useState(initial);
   const [parsed, setParsed] = useState<Parsed | null>(null);
   const [keywords, setKeywords] = useState("");
+  const [excluded, setExcluded] = useState("");
+  const [preferences, setPreferences] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function submit(e: FormEvent) {
@@ -25,12 +27,16 @@ export function IntentForm({
         });
         setParsed(result.parsed);
         setKeywords(result.parsed.keywords.join("，"));
+        setExcluded(result.parsed.excluded_keywords.join("，"));
+        setPreferences(result.parsed.preferences.join("，"));
       } else {
         await api("/intents/", "POST", {
           raw_query: query,
           parsed: {
             ...parsed,
             keywords: keywords.split(/[，,\s]+/).filter(Boolean),
+            excluded_keywords: excluded.split(/[，,\s]+/).filter(Boolean),
+            preferences: preferences.split(/[，,\s]+/).filter(Boolean),
           },
         });
         onDone();
@@ -71,7 +77,10 @@ export function IntentForm({
             确认一下，我们理解对了吗？
           </h3>
           {parsed.clarification && (
-            <p className="hint">{parsed.clarification}</p>
+            <p className="hint">
+              助手想确认：{parsed.clarification}{" "}
+              可修改上面的需求重新理解，或直接调整下方条件。
+            </p>
           )}
           <div className="form-grid">
             <label>
@@ -139,12 +148,28 @@ export function IntentForm({
             </label>
           </div>
           <label>
-            物品与偏好关键词
+            必须满足的物品与特征
             <input
               required
               value={keywords}
               onChange={(e) => setKeywords(e.target.value)}
-              placeholder="用逗号分隔，例如：鼠标，静音"
+              placeholder="用逗号分隔，例如：鼠标，无线"
+            />
+          </label>
+          <label>
+            不接受的特征
+            <input
+              value={excluded}
+              onChange={(e) => setExcluded(e.target.value)}
+              placeholder="例如：游戏鼠标，缺少接收器"
+            />
+          </label>
+          <label>
+            最好具备的偏好（可选）
+            <input
+              value={preferences}
+              onChange={(e) => setPreferences(e.target.value)}
+              placeholder="例如：静音，黑色；不满足也可推荐"
             />
           </label>
         </div>
@@ -153,6 +178,8 @@ export function IntentForm({
         每人最多 5 个活跃任务，默认持续 14 天，可随时暂停或结束。
         {meta.ai_mode === "local" &&
           "当前演示使用关键词规则解析，请确认筛选条件。"}
+        {meta.ai_mode === "remote" &&
+          "确认后，助手会在后台核对商品描述；信息不足的商品会标为待确认。"}
       </p>
       {error && (
         <p className="form-error" role="alert">

@@ -89,7 +89,12 @@ function currentView(): View {
   return (validViews.includes(v) ? v : "market") as View;
 }
 
-function useResource<T>(url: string, revision: number, enabled = true) {
+function useResource<T>(
+  url: string,
+  revision: number,
+  enabled = true,
+  poll = false,
+) {
   const [data, setData] = useState<T | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
@@ -112,10 +117,25 @@ function useResource<T>(url: string, revision: number, enabled = true) {
       .finally(() => {
         if (alive) setLoading(false);
       });
+    const timer = poll
+      ? window.setInterval(() => {
+          api<T>(url)
+            .then((d) => {
+              if (alive) {
+                setData(d);
+                setError("");
+              }
+            })
+            .catch((e) => {
+              if (alive) setError(e.message);
+            });
+        }, 10000)
+      : undefined;
     return () => {
       alive = false;
+      if (timer !== undefined) clearInterval(timer);
     };
-  }, [url, revision, enabled]);
+  }, [url, revision, enabled, poll]);
   return { data, loading, error };
 }
 
@@ -140,6 +160,7 @@ export default function App() {
     [compare, setCompare] = useState<Item[]>([]);
   const [notices, setNotices] = useState<Notice[]>([]),
     [prefill, setPrefill] = useState<Wanted | null>(null);
+  const [noticeIntent, setNoticeIntent] = useState<Intent | null>(null);
   const [draft, setDraft] = useState(""),
     [reporting, setReporting] = useState(false),
     [reportText, setReportText] = useState("");
@@ -298,8 +319,18 @@ export default function App() {
     "/intents/my",
     revision,
     view === "intents" && !!user,
+    true,
   );
   const wanted = useResource<Wanted[]>("/wanted/", revision, view === "wanted");
+  const taskNotices = useResource<Notice[]>(
+    `/notifications/?intent_id=${encodeURIComponent(noticeIntent?.id ?? "")}`,
+    revision,
+    modal === "notifications" && !!noticeIntent && !!user,
+    true,
+  );
+  const visibleNotices = noticeIntent
+    ? (taskNotices.data ?? []).filter((n) => n.intent_id === noticeIntent.id)
+    : notices;
   const unread = notices.filter((n) => !n.is_read).length;
 
   if (!meta)
@@ -418,7 +449,10 @@ export default function App() {
               className="notification-button icon-button"
               aria-label={`通知${unread ? `，${unread} 条未读` : ""}`}
               onClick={() => {
-                if (needUser()) setModal("notifications");
+                if (needUser()) {
+                  setNoticeIntent(null);
+                  setModal("notifications");
+                }
               }}
             >
               <Bell size={21} />
@@ -799,7 +833,7 @@ export default function App() {
                 <span>
                   {meta.ai_mode === "local"
                     ? "当前为本地关键词匹配演示"
-                    : "当前为语义向量匹配"}{" "}
+                    : "买家助手已开启：理解需求并核对商品描述"}{" "}
                   · 每个任务持续 14 天 · 最多 5 个活跃任务
                 </span>
               </div>
@@ -857,10 +891,45 @@ export default function App() {
                           <span key={k}>{k}</span>
                         ))}
                       </div>
+                      {(i.excluded_keywords.length > 0 ||
+                        i.preferences.length > 0) && (
+                        <div className="agent-conditions">
+                          {i.excluded_keywords.length > 0 && (
+                            <p>不接受：{i.excluded_keywords.join("、")}</p>
+                          )}
+                          {i.preferences.length > 0 && (
+                            <p>可选偏好：{i.preferences.join("、")}</p>
+                          )}
+                        </div>
+                      )}
+                      {i.status === "ACTIVE" && i.matching_state !== "DONE" && (
+                        <p className="hint" role="status">
+                          {i.matching_state === "FAILED"
+                            ? "商品核对暂时失败，你的代蹲条件已保存。"
+                            : "助手正在核对候选商品，完成后会更新通知。"}
+                          {i.matching_state === "FAILED" && (
+                            <button
+                              className="text-button"
+                              disabled={busy}
+                              onClick={() =>
+                                void operate(
+                                  () => api(`/intents/${i.id}/retry`, "POST"),
+                                  "已重新安排商品核对",
+                                )
+                              }
+                            >
+                              重新核对
+                            </button>
+                          )}
+                        </p>
+                      )}
                       <div className="intent-card-bottom">
                         <button
                           className="text-button"
-                          onClick={() => setModal("notifications")}
+                          onClick={() => {
+                            setNoticeIntent(i);
+                            setModal("notifications");
+                          }}
                         >
                           <Bell size={16} />
                           累计发现 {i.match_count} 件好物
@@ -1149,7 +1218,7 @@ export default function App() {
             initial={intentQuery}
             onDone={() => {
               setModal(null);
-              setToast("代蹲已开始，已有商品也已完成首次匹配");
+              setToast("需求已保存，燕渡会核对商品并持续代蹲");
               refresh();
               navigate("intents");
             }}
@@ -1185,10 +1254,20 @@ export default function App() {
         </Modal>
       )}
       {modal === "notifications" && (
-        <Modal title="燕渡为你捎来的消息" onClose={() => setModal(null)}>
-          {notices.length ? (
+        <Modal
+          title={noticeIntent ? "这个愿望发现的好物" : "燕渡为你捎来的消息"}
+          onClose={() => setModal(null)}
+        >
+          {noticeIntent && (
+            <p className="hint">当前愿望：{noticeIntent.raw_query}</p>
+          )}
+          {noticeIntent && taskNotices.loading ? (
+            <p className="hint">正在查看这个愿望的匹配结果…</p>
+          ) : noticeIntent && taskNotices.error ? (
+            <p role="alert">{taskNotices.error}</p>
+          ) : visibleNotices.length ? (
             <div className="notice-list">
-              {notices.map((n) => (
+              {visibleNotices.map((n) => (
                 <article
                   className={`notice ${n.is_read ? "" : "unread"}`}
                   key={n.id}
@@ -1196,10 +1275,41 @@ export default function App() {
                   <ProductArt item={n.item} />
                   <div>
                     <span className="task-status">
-                      {n.available ? "有好物符合你的期待" : "这件商品已不在售"}
+                      {!n.available
+                        ? "这件商品已不在售"
+                        : n.verdict === "UNCERTAIN"
+                          ? "可能合适，部分条件待确认"
+                          : "有好物符合你的期待"}
                     </span>
                     <h3>{n.item.title}</h3>
                     <p>{n.reason}</p>
+                    {n.evidence.length > 0 && (
+                      <details className="agent-evidence">
+                        <summary>
+                          查看
+                          {n.review_mode === "remote"
+                            ? "助手核对"
+                            : "关键词命中"}
+                          依据
+                        </summary>
+                        {n.evidence.map((e, index) => (
+                          <p key={index}>
+                            {e.criterion}：<q>{e.quote}</q>
+                          </p>
+                        ))}
+                      </details>
+                    )}
+                    {n.questions.length > 0 && (
+                      <div className="agent-questions">
+                        <strong>建议向卖家确认</strong>
+                        <ul>
+                          {n.questions.map((q, index) => (
+                            <li key={index}>{q}</li>
+                          ))}
+                        </ul>
+                        <span className="hint">这些问题会加入咨询草稿。</span>
+                      </div>
+                    )}
                     <div>
                       <button
                         className="text-button"
@@ -1233,10 +1343,18 @@ export default function App() {
             </div>
           ) : (
             <Empty
-              title="好消息正在路上"
-              text="创建代蹲任务后，符合条件的好物会出现在这里。"
-              action="去许个愿"
-              onAction={() => openForm("intent")}
+              title={
+                noticeIntent ? "这个愿望暂时没有匹配好物" : "好消息正在路上"
+              }
+              text={
+                noticeIntent
+                  ? "有符合这个愿望的好物时，会出现在这里。"
+                  : "创建代蹲任务后，符合条件的好物会出现在这里。"
+              }
+              action={noticeIntent ? "返回代蹲任务" : "去许个愿"}
+              onAction={() =>
+                noticeIntent ? setModal(null) : openForm("intent")
+              }
             />
           )}
         </Modal>

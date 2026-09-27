@@ -413,8 +413,11 @@ def create_app(settings: Settings | None = None):
         return {'ok': True}
 
     @app.get('/api/v1/notifications/')
-    def notifications(db: Session = Depends(get_db), user=Depends(require_user)):
+    def notifications(intent_id: str | None = None, db: Session = Depends(get_db), user=Depends(require_user)):
         query = select(Notification).where(Notification.buyer_id == user.id, Notification.verdict != 'NO_MATCH')
+        if intent_id is not None:
+            owned_intent(db, intent_id, user)
+            query = query.where(Notification.intent_id == intent_id)
         rows = db.scalars(query.order_by(Notification.created_at.desc()).limit(100))
         return [{'id': n.id, 'intent_id': n.intent_id, 'item': item_out(db.get(Item, n.item_id), db, user),
                  'score': n.score, 'reason': n.reason, 'verdict': n.verdict, 'questions': n.questions,

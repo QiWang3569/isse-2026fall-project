@@ -2321,3 +2321,41 @@ footer .brand svg {
     font-size: 10px;
   }
 }
+
+/* Buyer assistant evidence and condition explanations. */
+.agent-conditions {
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.agent-conditions p {
+  margin: 5px 0;
+  overflow-wrap: anywhere;
+}
+.agent-evidence {
+  margin: 12px 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.agent-evidence summary {
+  cursor: pointer;
+}
+.agent-evidence p {
+  padding-left: 10px;
+  border-left: 2px solid #d7e8dd;
+}
+.agent-questions {
+  margin: 12px 0;
+  padding: 12px;
+  background: #f6f3e9;
+  border-radius: 10px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.agent-questions ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+.agent-questions li {
+  margin: 5px 0;
+}

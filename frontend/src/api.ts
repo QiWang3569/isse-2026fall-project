@@ -29,6 +29,7 @@ export type Meta = {
   conditions: string[];
   demo_mode: boolean;
   ai_mode: string;
+  embedding_mode: string;
   active_items: number;
 };
 export type Parsed = {
@@ -36,6 +37,8 @@ export type Parsed = {
   max_price: number | null;
   campus: string;
   keywords: string[];
+  excluded_keywords: string[];
+  preferences: string[];
   condition_grade: string | null;
   clarification: string | null;
 };
@@ -47,6 +50,7 @@ export type Intent = Parsed & {
   created_at: string;
   expires_at: string;
   matching_mode: string;
+  matching_state: "PENDING" | "RUNNING" | "DONE" | "FAILED";
 };
 export type Notice = {
   id: string;
@@ -54,6 +58,11 @@ export type Notice = {
   item: Item;
   score: number;
   reason: string;
+  verdict: "MATCH" | "UNCERTAIN";
+  questions: string[];
+  evidence: { criterion: string; quote: string }[];
+  review_mode: string;
+  score_kind: string;
   is_read: boolean;
   available: boolean;
   created_at: string;
