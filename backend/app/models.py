@@ -1,0 +1,154 @@
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+def now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def uid():
+    return str(uuid4())
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = 'users'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    nickname: Mapped[str] = mapped_column(String(50))
+    campus: Mapped[str] = mapped_column(String(30))
+    role: Mapped[str] = mapped_column(String(20), default='student')
+    contact: Mapped[str] = mapped_column(String(100), default='')
+
+
+class LoginSession(Base):
+    __tablename__ = 'login_sessions'
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class Item(Base):
+    __tablename__ = 'items'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    seller_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    title: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default='')
+    category: Mapped[str] = mapped_column(String(30))
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    price_cents: Mapped[int] = mapped_column(Integer)
+    campus: Mapped[str] = mapped_column(String(30))
+    condition_grade: Mapped[str] = mapped_column(String(20), default='95新')
+    images: Mapped[list] = mapped_column(JSON, default=list)
+    art: Mapped[str] = mapped_column(String(30), default='box')
+    status: Mapped[str] = mapped_column(String(20), default='ACTIVE')
+    embedding: Mapped[list | None] = mapped_column(JSON().with_variant(Vector(1536), 'postgresql'), nullable=True)
+    embedding_model: Mapped[str] = mapped_column(String(100), default='local-keyword')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: now() + timedelta(days=14))
+    __table_args__ = (Index('idx_items_filter', 'status', 'category', 'campus', 'price_cents'),)
+
+
+class Intent(Base):
+    __tablename__ = 'buyer_intents'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    buyer_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    raw_query: Mapped[str] = mapped_column(Text)
+    category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    max_price_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    campus: Mapped[str] = mapped_column(String(30), default='不限校区')
+    keywords: Mapped[list] = mapped_column(JSON, default=list)
+    excluded_keywords: Mapped[list] = mapped_column(JSON, default=list)
+    preferences: Mapped[list] = mapped_column(JSON, default=list)
+    condition_grade: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default='ACTIVE')
+    embedding: Mapped[list | None] = mapped_column(JSON().with_variant(Vector(1536), 'postgresql'), nullable=True)
+    embedding_model: Mapped[str] = mapped_column(String(100), default='local-keyword')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: now() + timedelta(days=14))
+    __table_args__ = (Index('idx_intents_active', 'status', 'expires_at'),)
+
+
+class Notification(Base):
+    __tablename__ = 'match_notifications'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    buyer_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    intent_id: Mapped[str] = mapped_column(ForeignKey('buyer_intents.id'))
+    item_id: Mapped[str] = mapped_column(ForeignKey('items.id'))
+    score: Mapped[float] = mapped_column(Float)
+    reason: Mapped[str] = mapped_column(Text)
+    verdict: Mapped[str] = mapped_column(String(20), default='MATCH')
+    questions: Mapped[list] = mapped_column(JSON, default=list)
+    evidence: Mapped[list] = mapped_column(JSON, default=list)
+    review_mode: Mapped[str] = mapped_column(String(20), default='local')
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    __table_args__ = (UniqueConstraint('intent_id', 'item_id'),)
+
+
+class MatchJob(Base):
+    __tablename__ = 'match_jobs'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    kind: Mapped[str] = mapped_column(String(20))
+    target_id: Mapped[str] = mapped_column(String(36))
+    item_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default='PENDING')
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    error_code: Mapped[str] = mapped_column(String(40), default='')
+    __table_args__ = (Index('idx_match_jobs_pending', 'status', 'available_at'),)
+
+
+class Favorite(Base):
+    __tablename__ = 'favorites'
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id'), primary_key=True)
+    item_id: Mapped[str] = mapped_column(ForeignKey('items.id'), primary_key=True)
+
+
+class Wanted(Base):
+    __tablename__ = 'wanted_posts'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    buyer_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    title: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(30))
+    budget_cents: Mapped[int] = mapped_column(Integer)
+    campus: Mapped[str] = mapped_column(String(30))
+    status: Mapped[str] = mapped_column(String(20), default='ACTIVE')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: now() + timedelta(days=7))
+
+
+class Report(Base):
+    __tablename__ = 'reports'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    reporter_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    item_id: Mapped[str] = mapped_column(ForeignKey('items.id'))
+    reason: Mapped[str] = mapped_column(Text)
+    risk: Mapped[str] = mapped_column(String(20))
+    evidence: Mapped[list] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), default='OPEN')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class ActionLog(Base):
+    __tablename__ = 'action_logs'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    actor_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    action: Mapped[str] = mapped_column(String(80))
+    target_id: Mapped[str] = mapped_column(String(36))
+    detail: Mapped[str] = mapped_column(Text, default='')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class Upload(Base):
+    __tablename__ = 'uploads'
+    path: Mapped[str] = mapped_column(String(200), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
