@@ -17,7 +17,8 @@ def isolate_local_environment(monkeypatch):
     for name in ('AI_MODE', 'EMBEDDING_MODE', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'DEEPSEEK_MODEL',
                  'EMBEDDING_API_KEY', 'EMBEDDING_BASE_URL', 'EMBEDDING_MODEL', 'MODEL_THINKING',
                  'MODEL_TIMEOUT_SECONDS', 'MATCH_MAX_ATTEMPTS', 'MATCH_THRESHOLD', 'DATABASE_URL',
-                 'DEMO_MODE', 'ALLOWED_ORIGINS'):
+                 'DEMO_MODE', 'ALLOWED_ORIGINS', 'AUTH_CODE_SECRET', 'SMTP_HOST',
+                 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_FROM'):
         monkeypatch.delenv(name, raising=False)
 
 

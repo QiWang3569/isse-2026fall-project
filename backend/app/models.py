@@ -25,6 +25,19 @@ class User(Base):
     campus: Mapped[str] = mapped_column(String(30))
     role: Mapped[str] = mapped_column(String(20), default='student')
     contact: Mapped[str] = mapped_column(String(100), default='')
+    email: Mapped[str | None] = mapped_column(String(254), unique=True, nullable=True)
+
+
+class EmailChallenge(Base):
+    __tablename__ = 'email_challenges'
+    email: Mapped[str] = mapped_column(String(254), primary_key=True)
+    challenge_id: Mapped[str] = mapped_column(String(36), default=uid)
+    code_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    sent_at: Mapped[datetime] = mapped_column(DateTime)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime)
+    sends_in_window: Mapped[int] = mapped_column(Integer, default=1)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class LoginSession(Base):
@@ -32,6 +45,28 @@ class LoginSession(Base):
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
     expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class Conversation(Base):
+    __tablename__ = 'conversations'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    item_id: Mapped[str] = mapped_column(ForeignKey('items.id'))
+    buyer_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    seller_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    last_message_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    __table_args__ = (UniqueConstraint('item_id', 'buyer_id'), Index('idx_conversation_buyer', 'buyer_id', 'last_message_at'), Index('idx_conversation_seller', 'seller_id', 'last_message_at'))
+
+
+class ChatMessage(Base):
+    __tablename__ = 'chat_messages'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey('conversations.id'))
+    sender_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    __table_args__ = (Index('idx_chat_messages_conversation', 'conversation_id', 'created_at'),)
 
 
 class Item(Base):

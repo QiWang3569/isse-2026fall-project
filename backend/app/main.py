@@ -1,6 +1,9 @@
 import hashlib
+import hmac
 import io
+import logging
 import secrets
+import smtplib
 import threading
 import warnings
 from contextlib import asynccontextmanager
@@ -16,10 +19,11 @@ from sqlalchemy import create_engine, event, func, or_, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import ROOT, Settings
+from .email_auth import code_digest, new_code, normalize_pku_email, send_verification_email
 from .matching import MatchingRunner
 from .migrations import upgrade_buyer_agent
-from .models import ActionLog, Base, Favorite, Intent, Item, LoginSession, MatchJob, Notification, Report, Upload, User, Wanted, now, uid
-from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, DemoLogin, IntentChange, IntentCreate, ItemCreate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate
+from .models import ActionLog, Base, ChatMessage, Conversation, EmailChallenge, Favorite, Intent, Item, LoginSession, MatchJob, Notification, Report, Upload, User, Wanted, now, uid
+from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, ChatMessageCreate, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentCreate, ItemCreate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate
 from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, seed
 
 
@@ -114,6 +118,19 @@ def create_app(settings: Settings | None = None):
     def user_out(user):
         return {'id': user.id, 'nickname': user.nickname, 'campus': user.campus, 'role': user.role} if user else None
 
+    def own_user_out(user):
+        return {**user_out(user), 'email': user.email} if user else None
+
+    def begin_session(request, response, db, user):
+        old = request.cookies.get('yandu_session', '')
+        if old and (old_session := db.get(LoginSession, hashlib.sha256(old.encode()).hexdigest())):
+            db.delete(old_session)
+        token = secrets.token_urlsafe(32)
+        db.add(LoginSession(token_hash=hashlib.sha256(token.encode()).hexdigest(), user_id=user.id, expires_at=now()+timedelta(days=1)))
+        db.commit()
+        response.set_cookie('yandu_session', token, httponly=True, samesite='strict', secure=request.url.scheme == 'https', max_age=86400)
+        return {'user': own_user_out(user)}
+
     def item_out(item, db, user=None):
         seller = db.get(User, item.seller_id)
         return {'id': item.id, 'title': item.title, 'description': item.description, 'category': item.category,
@@ -159,25 +176,84 @@ def create_app(settings: Settings | None = None):
     def meta(db: Session = Depends(get_db)):
         return {'categories': CATEGORIES, 'campuses': CAMPUSES, 'conditions': CONDITIONS,
                 'demo_mode': settings.demo_mode, 'ai_mode': settings.ai_mode, 'embedding_mode': settings.embedding_mode,
+                'email_auth_ready': settings.email_auth_ready,
                 'active_items': db.scalar(select(func.count()).select_from(Item).where(Item.status == 'ACTIVE', Item.expires_at > now()))}
 
     @app.get('/api/v1/auth/me')
     def me(user=Depends(current_user)):
-        return {'user': user_out(user)}
+        return {'user': own_user_out(user)}
+
+    @app.post('/api/v1/auth/email/request-code')
+    def request_email_code(data: EmailCodeRequest, db: Session = Depends(get_db)):
+        email = normalize_pku_email(data.email)
+        if not email:
+            raise HTTPException(422, '仅支持 @pku.edu.cn 或 @stu.pku.edu.cn 邮箱')
+        if not settings.email_auth_ready:
+            raise HTTPException(503, '邮件登录尚未配置，请联系管理员')
+        with mutation_lock:
+            instant = now()
+            challenge = db.get(EmailChallenge, email)
+            if challenge and (instant - challenge.sent_at).total_seconds() < 60:
+                raise HTTPException(429, '请一分钟后再获取验证码')
+            if challenge and (instant - challenge.window_started_at).total_seconds() < 3600 and challenge.sends_in_window >= 5:
+                raise HTTPException(429, '验证码请求过于频繁，请稍后再试')
+            code = new_code()
+            challenge_id = uid()
+            try:
+                send_verification_email(settings, email, code)
+            except (OSError, smtplib.SMTPException) as exc:
+                logging.getLogger(__name__).warning('SMTP delivery failed: %s (code %s)',
+                                                    type(exc).__name__, getattr(exc, 'smtp_code', None))
+                raise HTTPException(502, '邮件发送失败，请稍后再试') from None
+            if challenge:
+                if (instant - challenge.window_started_at).total_seconds() >= 3600:
+                    challenge.window_started_at, challenge.sends_in_window = instant, 0
+                challenge.sends_in_window += 1
+                challenge.challenge_id = challenge_id
+                challenge.code_hash = code_digest(settings.auth_secret, challenge_id, email, code)
+                challenge.expires_at = instant + timedelta(minutes=10)
+                challenge.sent_at, challenge.attempts = instant, 0
+            else:
+                db.add(EmailChallenge(email=email, challenge_id=challenge_id,
+                                      code_hash=code_digest(settings.auth_secret, challenge_id, email, code),
+                                      expires_at=instant+timedelta(minutes=10), sent_at=instant,
+                                      window_started_at=instant, sends_in_window=1, attempts=0))
+            db.commit()
+        return {'ok': True, 'message': '验证码已发送，请检查邮箱'}
+
+    @app.post('/api/v1/auth/email/verify')
+    def verify_email_code(data: EmailCodeVerify, request: Request, response: Response, db: Session = Depends(get_db)):
+        email = normalize_pku_email(data.email)
+        if not email:
+            raise HTTPException(422, '仅支持 @pku.edu.cn 或 @stu.pku.edu.cn 邮箱')
+        if not settings.email_auth_ready:
+            raise HTTPException(503, '邮件登录尚未配置，请联系管理员')
+        with mutation_lock:
+            challenge = db.get(EmailChallenge, email)
+            if not challenge or challenge.expires_at <= now() or challenge.attempts >= 5:
+                raise HTTPException(400, '验证码无效或已过期，请重新获取')
+            expected = code_digest(settings.auth_secret, challenge.challenge_id, email, data.code)
+            if not hmac.compare_digest(challenge.code_hash, expected):
+                challenge.attempts += 1
+                db.commit()
+                raise HTTPException(400, '验证码无效或已过期，请重新获取')
+            user = db.scalar(select(User).where(User.email == email))
+            if not user:
+                nickname = data.nickname.strip()
+                if len(nickname) < 2:
+                    raise HTTPException(422, '首次注册请填写至少两个字的昵称')
+                user = User(email=email, nickname=nickname, campus=data.campus, role='student')
+                db.add(user)
+                db.flush()
+            db.delete(challenge)
+            return begin_session(request, response, db, user)
 
     @app.post('/api/v1/auth/demo')
     def login(data: DemoLogin, request: Request, response: Response, db: Session = Depends(get_db)):
         if not settings.demo_mode:
-            raise HTTPException(503, '演示登录已关闭，校园统一身份认证尚未接入')
-        old = request.cookies.get('yandu_session')
-        if old and (old_session := db.get(LoginSession, hashlib.sha256(old.encode()).hexdigest())):
-            db.delete(old_session)
-        token = secrets.token_urlsafe(32)
+            raise HTTPException(503, '演示登录已关闭，请使用北大邮箱登录')
         user = db.get(User, 'demo-' + data.profile)
-        db.add(LoginSession(token_hash=hashlib.sha256(token.encode()).hexdigest(), user_id=user.id, expires_at=now()+timedelta(days=1)))
-        db.commit()
-        response.set_cookie('yandu_session', token, httponly=True, samesite='strict', secure=request.url.scheme == 'https', max_age=86400)
-        return {'user': user_out(user)}
+        return begin_session(request, response, db, user)
 
     @app.post('/api/v1/auth/logout')
     def logout(request: Request, response: Response, db: Session = Depends(get_db)):
@@ -187,6 +263,93 @@ def create_app(settings: Settings | None = None):
             db.delete(row)
             db.commit()
         response.delete_cookie('yandu_session')
+        return {'ok': True}
+
+    def owned_conversation(db, conversation_id, user):
+        conversation = db.get(Conversation, conversation_id)
+        if not conversation or user.id not in {conversation.buyer_id, conversation.seller_id}:
+            raise HTTPException(404, '会话不存在')
+        return conversation
+
+    def message_out(message):
+        return {'id': message.id, 'conversation_id': message.conversation_id,
+                'sender_id': message.sender_id, 'body': message.body,
+                'created_at': iso(message.created_at),
+                'read_at': iso(message.read_at) if message.read_at else None}
+
+    def conversation_out(db, conversation, user):
+        item = db.get(Item, conversation.item_id)
+        counterpart_id = conversation.seller_id if user.id == conversation.buyer_id else conversation.buyer_id
+        last_message = db.scalar(select(ChatMessage).where(ChatMessage.conversation_id == conversation.id)
+                                 .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc()).limit(1))
+        unread = db.scalar(select(func.count()).select_from(ChatMessage).where(
+            ChatMessage.conversation_id == conversation.id, ChatMessage.sender_id != user.id,
+            ChatMessage.read_at.is_(None)))
+        return {'id': conversation.id, 'item_id': item.id, 'item_title': item.title,
+                'item_status': item.status, 'item_image': item.images[0] if item.images else None,
+                'counterpart': user_out(db.get(User, counterpart_id)),
+                'last_message': message_out(last_message) if last_message else None,
+                'unread_count': unread, 'updated_at': iso(conversation.last_message_at)}
+
+    @app.get('/api/v1/conversations')
+    def conversations(db: Session = Depends(get_db), user=Depends(require_user)):
+        rows = db.scalars(select(Conversation).where(or_(Conversation.buyer_id == user.id, Conversation.seller_id == user.id))
+                          .order_by(Conversation.last_message_at.desc()).limit(100)).all()
+        return [conversation_out(db, row, user) for row in rows]
+
+    @app.post('/api/v1/items/{item_id}/conversations', status_code=201)
+    def start_conversation(item_id: str, data: ChatMessageCreate, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            item = get_item(db, item_id)
+            if item.seller_id == user.id:
+                raise HTTPException(403, '不能给自己的商品发消息')
+            if item.status != 'ACTIVE' or item.expires_at <= now():
+                raise HTTPException(409, '商品当前不可咨询')
+            conversation = db.scalar(select(Conversation).where(Conversation.item_id == item.id,
+                                    Conversation.buyer_id == user.id))
+            if not conversation:
+                conversation = Conversation(item_id=item.id, buyer_id=user.id, seller_id=item.seller_id)
+                db.add(conversation)
+                db.flush()
+            message = ChatMessage(conversation_id=conversation.id, sender_id=user.id, body=data.body)
+            db.add(message)
+            db.flush()
+            conversation.last_message_at = message.created_at
+            db.commit()
+            return {'conversation': conversation_out(db, conversation, user), 'message': message_out(message)}
+
+    @app.get('/api/v1/conversations/{conversation_id}/messages')
+    def conversation_messages(conversation_id: str, before_id: str | None = None,
+                              db: Session = Depends(get_db), user=Depends(require_user)):
+        owned_conversation(db, conversation_id, user)
+        query = select(ChatMessage).where(ChatMessage.conversation_id == conversation_id)
+        if before_id:
+            anchor = db.get(ChatMessage, before_id)
+            if not anchor or anchor.conversation_id != conversation_id:
+                raise HTTPException(404, '消息不存在')
+            query = query.where(or_(ChatMessage.created_at < anchor.created_at,
+                                    (ChatMessage.created_at == anchor.created_at) & (ChatMessage.id < anchor.id)))
+        rows = db.scalars(query.order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc()).limit(51)).all()
+        return {'messages': [message_out(row) for row in reversed(rows[:50])], 'has_more': len(rows) > 50}
+
+    @app.post('/api/v1/conversations/{conversation_id}/messages', status_code=201)
+    def send_message(conversation_id: str, data: ChatMessageCreate,
+                     db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            conversation = owned_conversation(db, conversation_id, user)
+            message = ChatMessage(conversation_id=conversation.id, sender_id=user.id, body=data.body)
+            db.add(message)
+            db.flush()
+            conversation.last_message_at = message.created_at
+            db.commit()
+            return message_out(message)
+
+    @app.post('/api/v1/conversations/{conversation_id}/read')
+    def read_conversation(conversation_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        owned_conversation(db, conversation_id, user)
+        db.execute(update(ChatMessage).where(ChatMessage.conversation_id == conversation_id,
+                   ChatMessage.sender_id != user.id, ChatMessage.read_at.is_(None)).values(read_at=now()))
+        db.commit()
         return {'ok': True}
 
     @app.get('/api/v1/items/')

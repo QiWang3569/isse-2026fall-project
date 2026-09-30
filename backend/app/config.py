@@ -26,6 +26,12 @@ class Settings:
     embedding_url: str = field(default_factory=lambda: os.getenv('EMBEDDING_BASE_URL', 'https://api.openai.com/v1'))
     embedding_model: str = field(default_factory=lambda: os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small'))
     origins: list[str] = field(default_factory=lambda: os.getenv('ALLOWED_ORIGINS', 'http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:8000,http://localhost:8000').split(','))
+    auth_secret: str = field(default_factory=lambda: os.getenv('AUTH_CODE_SECRET', ''))
+    smtp_host: str = field(default_factory=lambda: os.getenv('SMTP_HOST', ''))
+    smtp_port: int = field(default_factory=lambda: int(os.getenv('SMTP_PORT', '465')))
+    smtp_user: str = field(default_factory=lambda: os.getenv('SMTP_USER', ''))
+    smtp_password: str = field(default_factory=lambda: os.getenv('SMTP_PASSWORD', ''))
+    smtp_from: str = field(default_factory=lambda: os.getenv('SMTP_FROM', ''))
 
     def __post_init__(self):
         if self.ai_mode not in {'local', 'remote'}:
@@ -44,3 +50,7 @@ class Settings:
             raise ValueError('Model timeout must be 1–120 seconds; match attempts must be 1–5')
         if not 0 <= self.threshold <= 1:
             raise ValueError('MATCH_THRESHOLD must be between 0 and 1')
+
+    @property
+    def email_auth_ready(self):
+        return len(self.auth_secret) >= 32 and bool(self.smtp_host and self.smtp_from)

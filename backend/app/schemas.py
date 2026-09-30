@@ -112,3 +112,26 @@ class ReviewAction(StrictModel):
 
 class DemoLogin(StrictModel):
     profile: Literal['buyer', 'seller', 'admin']
+
+
+class EmailCodeRequest(StrictModel):
+    email: str = Field(max_length=254)
+
+
+class EmailCodeVerify(EmailCodeRequest):
+    code: str = Field(pattern=r'^\d{8}$')
+    nickname: str = Field(default='', max_length=50)
+    campus: str = '不限校区'
+
+    campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
+
+
+class ChatMessageCreate(StrictModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+    @field_validator('body')
+    @classmethod
+    def nonblank(cls, value):
+        if not value.strip():
+            raise ValueError('消息不能为空')
+        return value.strip()

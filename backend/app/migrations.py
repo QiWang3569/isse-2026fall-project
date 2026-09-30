@@ -4,6 +4,7 @@ from sqlalchemy import inspect, text
 
 def upgrade_buyer_agent(engine):
     additions = {
+        'users': {'email': 'VARCHAR(254)'},
         'buyer_intents': {'excluded_keywords': "JSON NOT NULL DEFAULT '[]'",
                          'preferences': "JSON NOT NULL DEFAULT '[]'"},
         'match_notifications': {'verdict': "VARCHAR(20) NOT NULL DEFAULT 'MATCH'",
@@ -18,3 +19,4 @@ def upgrade_buyer_agent(engine):
             for name, ddl in fields.items():
                 if name not in existing:
                     conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}'))
+        conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email ON users (email)'))
