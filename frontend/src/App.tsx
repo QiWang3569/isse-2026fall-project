@@ -39,6 +39,7 @@ import {
   Share2,
   RefreshCw,
   CheckCheck,
+  MessageCircle,
 } from "lucide-react";
 import {
   api,
@@ -50,6 +51,7 @@ import {
   type Wanted,
   type Report,
   type Log,
+  type Conversation,
   money,
   campusShort,
   statusText,
@@ -64,15 +66,17 @@ import {
   ProductArt,
 } from "./components";
 import { IntentForm, PublishForm, WantedForm } from "./forms";
+import { ChatCenter, EmailSignIn } from "./AccountAndChat";
 
 const nav = [
   { key: "market", label: "逛逛校园", icon: Compass },
   { key: "intents", label: "我的代蹲", icon: Sparkles },
+  { key: "messages", label: "站内消息", icon: MessageCircle },
   { key: "wanted", label: "求购看板", icon: Sprout },
   { key: "favorites", label: "我的收藏", icon: Heart },
   { key: "mine", label: "我发布的", icon: Package },
 ];
-type View = "market" | "intents" | "wanted" | "favorites" | "mine" | "admin";
+type View = "market" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "admin";
 type ModalName =
   | "login"
   | "intent"
@@ -85,6 +89,7 @@ type ModalName =
 const validViews = [
   "market",
   "intents",
+  "messages",
   "wanted",
   "favorites",
   "mine",
@@ -167,6 +172,8 @@ export default function App() {
   const [notices, setNotices] = useState<Notice[]>([]),
     [prefill, setPrefill] = useState<Wanted | null>(null);
   const [noticeIntent, setNoticeIntent] = useState<Intent | null>(null);
+  const [chatItem, setChatItem] = useState<Item | null>(null),
+    [chatDraft, setChatDraft] = useState("");
   const [draft, setDraft] = useState(""),
     [draftOpen, setDraftOpen] = useState(false),
     [reporting, setReporting] = useState(false),
@@ -259,6 +266,17 @@ export default function App() {
     }
     return true;
   };
+  function signedIn(account: User) {
+    setUser(account);
+    setCompare([]);
+    if (selected) {
+      void api<Item>(`/items/${selected.id}`).then((item) => {
+        setSelected(item);
+        setModal("detail");
+      }).catch((error) => { setModal(null); setToast((error as Error).message); });
+    } else setModal(null);
+    refresh();
+  }
   async function operate(task: () => Promise<unknown>, message?: string) {
     setBusy(true);
     try {
@@ -353,6 +371,7 @@ export default function App() {
     true,
   );
   const wanted = useResource<Wanted[]>("/wanted/", revision, view === "wanted");
+  const conversations = useResource<Conversation[]>("/conversations", revision, !!user, true);
   const taskNotices = useResource<Notice[]>(
     `/notifications/?intent_id=${encodeURIComponent(noticeIntent?.id ?? "")}`,
     revision,
@@ -363,6 +382,7 @@ export default function App() {
     ? (taskNotices.data ?? []).filter((n) => n.intent_id === noticeIntent.id)
     : notices;
   const unread = notices.filter((n) => !n.is_read).length;
+  const chatUnread = (conversations.data ?? []).reduce((sum, c) => sum + c.unread_count, 0);
 
   if (!meta)
     return (
@@ -411,6 +431,7 @@ export default function App() {
               <Icon size={20} strokeWidth={1.7} />
               <span>{label}</span>
               {key === "intents" && <span className="nav-new">NEW</span>}
+              {key === "messages" && chatUnread > 0 && <span className="nav-new">{chatUnread}</span>}
             </button>
           ))}
           {user?.role === "admin" && (
@@ -438,7 +459,7 @@ export default function App() {
           </div>
           <div className="sidebar-caption">
             <ShieldCheck size={15} />
-            {meta.demo_mode ? "本地演示 · 校园认证待接入" : "燕渡校园社区"}
+            {meta.demo_mode ? "本地演示 · 北大邮箱可选" : "北大邮箱社区"}
           </div>
         </div>
       </aside>
@@ -492,10 +513,10 @@ export default function App() {
             <button
               className="avatar-button"
               onClick={() => setModal("login")}
-              aria-label={user ? `当前账号 ${user.nickname}` : "登录"}
+              aria-label={user ? `当前账号 ${user.nickname}` : "登录或注册"}
             >
               <span className="avatar">{user ? user.nickname[0] : "访"}</span>
-              <span>{user?.nickname || "登录"}</span>
+              <span>{user?.nickname || "登录/注册"}</span>
             </button>
           </div>
         </header>
@@ -767,7 +788,7 @@ export default function App() {
                 <Empty
                   title="登录后，继续你的校园之旅"
                   text="收藏和发布记录会跟随你的账号保存。"
-                  action="进入演示账号"
+                  action={meta.demo_mode ? "进入演示账号" : "登录或注册"}
                   onAction={() => setModal("login")}
                 />
               ) : items.loading ? (
@@ -877,7 +898,7 @@ export default function App() {
                 <Empty
                   title="登录后，让燕渡替你留意"
                   text="你的需求和命中记录会保存在账号中。"
-                  action="进入演示账号"
+                  action={meta.demo_mode ? "进入演示账号" : "登录或注册"}
                   onAction={() => setModal("login")}
                 />
               ) : intents.loading ? (
@@ -1120,6 +1141,14 @@ export default function App() {
               )}
             </>
           )}
+          {view === "messages" && (user ? (
+            <ChatCenter user={user} conversations={conversations.data ?? []}
+              initialItem={chatItem} initialDraft={chatDraft}
+              onStarted={() => { setChatItem(null); setChatDraft(""); }} refresh={refresh} />
+          ) : (
+            <Empty title="登录后查看站内消息" text="通过北大邮箱验证后，就能和商品发布者沟通。"
+              action="登录或注册" onAction={() => setModal("login")} />
+          ))}
           {view === "admin" && (
             <Admin
               user={user}
@@ -1189,11 +1218,10 @@ export default function App() {
         >
           <div className="stack-form">
             <p className="muted">
-              {meta.demo_mode
-                ? "这是本地演示环境。选择不同账号体验买家、卖家与管理员流程；这些账号不代表真实校园身份。"
-                : "校园统一身份认证尚未接入，请联系项目管理员。"}
+              {user?.email ? `已验证邮箱：${user.email}` : "北大邮箱验证码登录。演示账号只用于本地体验。"}
             </p>
-            {meta.demo_mode && (
+            {!user && <EmailSignIn meta={meta} onSignedIn={signedIn} />}
+            {!user && meta.demo_mode && (
               <div className="login-options">
                 {[
                   {
@@ -1222,10 +1250,7 @@ export default function App() {
                           "POST",
                           { profile: p.id },
                         );
-                        setUser(result.user);
-                        setModal(null);
-                        setSelected(null);
-                        setCompare([]);
+                        signedIn(result.user);
                       }, `已进入${p.name}的演示账号`)
                     }
                   >
@@ -1577,8 +1602,15 @@ export default function App() {
                 </div>
               ) : (
                 <div className="detail-actions">
+                  <button className="button primary" disabled={selected.status !== "ACTIVE"}
+                    onClick={() => {
+                      if (!needUser()) return;
+                      setChatItem(selected); setChatDraft(""); setModal(null); navigate("messages");
+                    }}>
+                    <MessageCircle size={16} />联系卖家
+                  </button>
                   <button
-                    className="button primary"
+                    className="button secondary"
                     disabled={busy || selected.status !== "ACTIVE"}
                     onClick={() => {
                       if (needUser())
@@ -1647,7 +1679,7 @@ export default function App() {
                 rows={3}
               />
               <div>
-                <p>由你确认并复制发送。演示版未接入站内聊天或微信。</p>
+                <p>草稿尚未发送。你可以修改后在站内消息中确认发送。</p>
                 <button
                   className="text-button"
                   onClick={() => setDraftOpen(false)}
@@ -1661,6 +1693,9 @@ export default function App() {
                   <Copy size={15} />
                   复制草稿
                 </button>
+                <button className="button primary" onClick={() => {
+                  setChatItem(selected); setChatDraft(draft); setModal(null); navigate("messages");
+                }}><MessageCircle size={15} />去站内消息</button>
               </div>
             </div>
           )}

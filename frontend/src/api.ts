@@ -3,6 +3,7 @@ export type User = {
   nickname: string;
   campus: string;
   role: string;
+  email?: string | null;
 };
 export type Item = {
   id: string;
@@ -31,6 +32,26 @@ export type Meta = {
   ai_mode: string;
   embedding_mode: string;
   active_items: number;
+  email_auth_ready: boolean;
+};
+export type ChatMessage = {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  body: string;
+  created_at: string;
+  read_at: string | null;
+};
+export type Conversation = {
+  id: string;
+  item_id: string;
+  item_title: string;
+  item_status: string;
+  item_image: string | null;
+  counterpart: User;
+  last_message: ChatMessage | null;
+  unread_count: number;
+  updated_at: string;
 };
 export type Parsed = {
   category: string | null;
