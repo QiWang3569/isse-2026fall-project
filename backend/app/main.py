@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import io
+import asyncio
 import logging
 import secrets
 import smtplib
@@ -22,8 +23,9 @@ from .config import ROOT, Settings
 from .email_auth import code_digest, new_code, normalize_pku_email, send_verification_email
 from .matching import MatchingRunner
 from .migrations import upgrade_buyer_agent
-from .models import ActionLog, Base, ChatMessage, Conversation, EmailChallenge, Favorite, Intent, Item, LoginSession, MatchJob, Notification, Report, Upload, User, Wanted, now, uid
-from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, ChatMessageCreate, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentCreate, ItemCreate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate
+from .retention import prune_chat
+from .models import ActionLog, Base, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, LoginSession, MatchJob, Notification, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
+from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate
 from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, seed
 
 
@@ -59,10 +61,21 @@ def create_app(settings: Settings | None = None):
         if settings.demo_mode:
             with factory() as db:
                 seed(db)
+        await asyncio.to_thread(prune_chat, factory, mutation_lock, settings.chat_retention_days)
+        async def retention_loop():
+            while True:
+                await asyncio.sleep(86400)
+                await asyncio.to_thread(prune_chat, factory, mutation_lock, settings.chat_retention_days)
+        retention_task = asyncio.create_task(retention_loop())
         matching.start()
         try:
             yield
         finally:
+            retention_task.cancel()
+            try:
+                await retention_task
+            except asyncio.CancelledError:
+                pass
             matching.stop()
             engine.dispose()
 
@@ -91,6 +104,12 @@ def create_app(settings: Settings | None = None):
             instant = now()
             for cls in (Item, Intent, Wanted):
                 db.execute(update(cls).where(cls.expires_at <= instant, cls.status.in_(['ACTIVE', 'PAUSED', 'RESERVED'])).values(status='EXPIRED'))
+            db.execute(update(Conversation).where(Conversation.deal_status == 'RESERVED',
+                       Conversation.item_id.in_(select(Item.id).where(Item.status == 'EXPIRED')))
+                       .values(deal_status='CANCELED'))
+            db.execute(update(Conversation).where(Conversation.deal_status == 'REQUESTED',
+                       Conversation.item_id.in_(select(Item.id).where(Item.status == 'EXPIRED')))
+                       .values(deal_status='DECLINED'))
             db.commit()
             yield db
 
@@ -119,7 +138,8 @@ def create_app(settings: Settings | None = None):
         return {'id': user.id, 'nickname': user.nickname, 'campus': user.campus, 'role': user.role} if user else None
 
     def own_user_out(user):
-        return {**user_out(user), 'email': user.email} if user else None
+        return {**user_out(user), 'email': user.email, 'bio': user.bio,
+                'avatar_color': user.avatar_color} if user else None
 
     def begin_session(request, response, db, user):
         old = request.cookies.get('yandu_session', '')
@@ -138,7 +158,9 @@ def create_app(settings: Settings | None = None):
                 'tags': item.tags, 'images': item.images, 'art': item.art, 'status': item.status,
                 'seller': user_out(seller), 'created_at': iso(item.created_at), 'expires_at': iso(item.expires_at),
                 'is_favorite': bool(user and db.get(Favorite, (user.id, item.id))),
-                'is_owner': bool(user and user.id == item.seller_id), 'is_demo': item.id.startswith('sample-')}
+                'is_owner': bool(user and user.id == item.seller_id), 'is_demo': item.id.startswith('sample-'),
+                'sale_feedback_count': db.scalar(select(func.count()).select_from(SaleFeedback).where(
+                    SaleFeedback.item_id == item.id, SaleFeedback.status == 'OPEN')) if user and user.id == item.seller_id else 0}
 
     def intent_out(intent, db):
         count = db.scalar(select(func.count()).select_from(Notification).where(Notification.intent_id == intent.id, Notification.verdict != 'NO_MATCH'))
@@ -150,7 +172,8 @@ def create_app(settings: Settings | None = None):
                 'campus': intent.campus, 'keywords': intent.keywords, 'condition_grade': intent.condition_grade,
                 'excluded_keywords': intent.excluded_keywords, 'preferences': intent.preferences, 'clarification': None,
                 'matching_state': state,
-                'status': intent.status, 'match_count': count, 'created_at': iso(intent.created_at),
+                'status': intent.status, 'completed_item_id': intent.completed_item_id,
+                'match_count': count, 'created_at': iso(intent.created_at),
                 'expires_at': iso(intent.expires_at), 'matching_mode': intent.embedding_model}
 
     def owned_intent(db, id, user):
@@ -182,6 +205,24 @@ def create_app(settings: Settings | None = None):
     @app.get('/api/v1/auth/me')
     def me(user=Depends(current_user)):
         return {'user': own_user_out(user)}
+
+    @app.patch('/api/v1/users/me')
+    def update_profile(data: ProfileUpdate, user: User = Depends(require_user), db: Session = Depends(get_db)):
+        with mutation_lock:
+            user.nickname = data.nickname
+            user.campus = data.campus
+            user.bio = data.bio
+            user.avatar_color = data.avatar_color
+            db.commit()
+        return {'user': own_user_out(user)}
+
+    @app.get('/api/v1/users/me/overview')
+    def profile_overview(user: User = Depends(require_user), db: Session = Depends(get_db)):
+        return {
+            'intents': db.scalar(select(func.count()).select_from(Intent).where(Intent.buyer_id == user.id)),
+            'listings': db.scalar(select(func.count()).select_from(Item).where(Item.seller_id == user.id)),
+            'favorites': db.scalar(select(func.count()).select_from(Favorite).where(Favorite.user_id == user.id)),
+        }
 
     @app.post('/api/v1/auth/email/request-code')
     def request_email_code(data: EmailCodeRequest, db: Session = Depends(get_db)):
@@ -273,7 +314,8 @@ def create_app(settings: Settings | None = None):
 
     def message_out(message):
         return {'id': message.id, 'conversation_id': message.conversation_id,
-                'sender_id': message.sender_id, 'body': message.body,
+                'sender_id': message.sender_id, 'body': '此消息已被管理员隐藏' if message.hidden_at else message.body,
+                'hidden': bool(message.hidden_at),
                 'created_at': iso(message.created_at),
                 'read_at': iso(message.read_at) if message.read_at else None}
 
@@ -285,11 +327,19 @@ def create_app(settings: Settings | None = None):
         unread = db.scalar(select(func.count()).select_from(ChatMessage).where(
             ChatMessage.conversation_id == conversation.id, ChatMessage.sender_id != user.id,
             ChatMessage.read_at.is_(None)))
-        return {'id': conversation.id, 'item_id': item.id, 'item_title': item.title,
+        blocked = db.get(UserBlock, (user.id, counterpart_id)) is not None or db.get(UserBlock, (counterpart_id, user.id)) is not None
+        return {'id': conversation.id, 'item_id': item.id, 'buyer_id': conversation.buyer_id,
+                'seller_id': conversation.seller_id, 'item_title': item.title,
                 'item_status': item.status, 'item_image': item.images[0] if item.images else None,
                 'counterpart': user_out(db.get(User, counterpart_id)),
                 'last_message': message_out(last_message) if last_message else None,
-                'unread_count': unread, 'updated_at': iso(conversation.last_message_at)}
+                'unread_count': unread, 'updated_at': iso(conversation.last_message_at),
+                'blocked': blocked, 'blocked_by_me': db.get(UserBlock, (user.id, counterpart_id)) is not None,
+                'deal_status': conversation.deal_status}
+
+    def assert_unblocked(db, first_id, second_id):
+        if db.get(UserBlock, (first_id, second_id)) or db.get(UserBlock, (second_id, first_id)):
+            raise HTTPException(403, '双方已停止联系，不能发送消息')
 
     @app.get('/api/v1/conversations')
     def conversations(db: Session = Depends(get_db), user=Depends(require_user)):
@@ -303,6 +353,7 @@ def create_app(settings: Settings | None = None):
             item = get_item(db, item_id)
             if item.seller_id == user.id:
                 raise HTTPException(403, '不能给自己的商品发消息')
+            assert_unblocked(db, user.id, item.seller_id)
             if item.status != 'ACTIVE' or item.expires_at <= now():
                 raise HTTPException(409, '商品当前不可咨询')
             conversation = db.scalar(select(Conversation).where(Conversation.item_id == item.id,
@@ -337,6 +388,8 @@ def create_app(settings: Settings | None = None):
                      db: Session = Depends(get_db), user=Depends(require_user)):
         with mutation_lock:
             conversation = owned_conversation(db, conversation_id, user)
+            counterpart_id = conversation.seller_id if user.id == conversation.buyer_id else conversation.buyer_id
+            assert_unblocked(db, user.id, counterpart_id)
             message = ChatMessage(conversation_id=conversation.id, sender_id=user.id, body=data.body)
             db.add(message)
             db.flush()
@@ -351,6 +404,90 @@ def create_app(settings: Settings | None = None):
                    ChatMessage.sender_id != user.id, ChatMessage.read_at.is_(None)).values(read_at=now()))
         db.commit()
         return {'ok': True}
+
+    @app.post('/api/v1/conversations/{conversation_id}/block')
+    def block_conversation(conversation_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            conversation = owned_conversation(db, conversation_id, user)
+            counterpart_id = conversation.seller_id if user.id == conversation.buyer_id else conversation.buyer_id
+            if not db.get(UserBlock, (user.id, counterpart_id)):
+                db.add(UserBlock(blocker_id=user.id, blocked_id=counterpart_id))
+                log(db, user, 'chat.block', counterpart_id)
+                db.commit()
+        return {'ok': True}
+
+    @app.delete('/api/v1/conversations/{conversation_id}/block')
+    def unblock_conversation(conversation_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            conversation = owned_conversation(db, conversation_id, user)
+            counterpart_id = conversation.seller_id if user.id == conversation.buyer_id else conversation.buyer_id
+            block = db.get(UserBlock, (user.id, counterpart_id))
+            if block:
+                db.delete(block)
+                log(db, user, 'chat.unblock', counterpart_id)
+                db.commit()
+        return {'ok': True}
+
+    @app.post('/api/v1/conversations/{conversation_id}/messages/{message_id}/reports', status_code=201)
+    def report_chat_message(conversation_id: str, message_id: str, data: ChatReportCreate,
+                            db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            owned_conversation(db, conversation_id, user)
+            message = db.get(ChatMessage, message_id)
+            if not message or message.conversation_id != conversation_id or message.sender_id == user.id:
+                raise HTTPException(404, '可举报的消息不存在')
+            if db.scalar(select(ChatReport).where(ChatReport.message_id == message_id,
+                         ChatReport.reporter_id == user.id)):
+                raise HTTPException(409, '你已举报过这条消息')
+            report = ChatReport(reporter_id=user.id, message_id=message_id, reason=data.reason.strip())
+            db.add(report)
+            db.flush()
+            log(db, user, 'chat.report', report.id)
+            db.commit()
+            return {'id': report.id, 'status': report.status}
+
+    @app.post('/api/v1/conversations/{conversation_id}/deal')
+    def change_deal(conversation_id: str, data: DealAction, db: Session = Depends(get_db), user=Depends(require_user)):
+        jobs = []
+        with mutation_lock:
+            conversation = owned_conversation(db, conversation_id, user)
+            item = db.scalar(select(Item).where(Item.id == conversation.item_id).with_for_update().execution_options(populate_existing=True))
+            action, state = data.action, conversation.deal_status
+            buyer = user.id == conversation.buyer_id
+            transitions = {
+                'request': (buyer, {'NONE', 'DECLINED', 'CANCELED'}, 'ACTIVE', 'REQUESTED'),
+                'reserve': (not buyer, {'REQUESTED'}, 'ACTIVE', 'RESERVED'),
+                'decline': (not buyer, {'REQUESTED'}, None, 'DECLINED'),
+                'cancel': (buyer, {'REQUESTED', 'RESERVED'}, None, 'CANCELED'),
+                'sold': (not buyer, {'RESERVED'}, 'RESERVED', 'SOLD'),
+                'confirm': (buyer, {'SOLD'}, 'SOLD', 'CONFIRMED'),
+            }
+            permitted, old_states, item_state, new_state = transitions[action]
+            if not permitted:
+                raise HTTPException(403, '只能由对应的买家或卖家确认这一步')
+            if state not in old_states or (item_state and item.status != item_state):
+                raise HTTPException(409, '当前交易状态不允许此操作，请刷新后重试')
+            if action in {'request', 'reserve'} and item.expires_at <= now():
+                raise HTTPException(409, '商品已过期')
+            if action in {'request', 'reserve'}:
+                assert_unblocked(db, conversation.buyer_id, conversation.seller_id)
+            if action == 'reserve':
+                item.status = 'RESERVED'
+            elif action == 'cancel' and state == 'RESERVED':
+                item.status = 'ACTIVE' if item.expires_at > now() else 'EXPIRED'
+                if item.status == 'ACTIVE':
+                    jobs = matching.enqueue_item(db, item)
+            elif action == 'sold':
+                item.status = 'SOLD'
+                db.execute(update(SaleFeedback).where(SaleFeedback.item_id == item.id,
+                           SaleFeedback.status == 'OPEN').values(status='CONFIRMED'))
+            conversation.deal_status = new_state
+            log(db, user, 'deal.'+action, conversation.id)
+            db.commit()
+            result = conversation_out(db, conversation, user)
+        for job_id in jobs:
+            matching.run_or_wake(job_id)
+        return result
 
     @app.get('/api/v1/items/')
     def items(q: str = Query('', max_length=120), category: str | None = None, campus: str | None = None,
@@ -456,7 +593,25 @@ def create_app(settings: Settings | None = None):
                 raise HTTPException(403, '只能修改自己发布的商品')
             if item.status in {'BANNED', 'SOLD'}:
                 raise HTTPException(409, '已售出或审核隐藏的商品不能由卖家重新上架')
+            if data.status == 'RESERVED' and item.status == 'ACTIVE' and db.scalar(
+                    select(Conversation).where(Conversation.item_id == item.id,
+                                               Conversation.deal_status == 'REQUESTED')):
+                raise HTTPException(409, '已有买家申请预订，请先在站内消息中确认或拒绝')
+            if item.status == 'RESERVED' and data.status != 'RESERVED':
+                for conversation in db.scalars(select(Conversation).where(Conversation.item_id == item.id,
+                                        Conversation.deal_status == 'RESERVED')):
+                    conversation.deal_status = 'SOLD' if data.status == 'SOLD' else 'CANCELED'
+            if data.status == 'RESERVED':
+                other = db.scalar(select(Conversation).where(Conversation.item_id == item.id,
+                                  Conversation.deal_status == 'RESERVED'))
+                if other and item.status != 'RESERVED':
+                    raise HTTPException(409, '已有买家预订，请先处理该交易')
             item.status = data.status
+            if data.status == 'SOLD':
+                db.execute(update(SaleFeedback).where(SaleFeedback.item_id == item.id,
+                           SaleFeedback.status == 'OPEN').values(status='CONFIRMED'))
+                db.execute(update(Conversation).where(Conversation.item_id == item.id,
+                           Conversation.deal_status == 'REQUESTED').values(deal_status='DECLINED'))
             if data.status == 'ACTIVE':
                 item.expires_at = now()+timedelta(days=14)
             db.flush()
@@ -465,6 +620,60 @@ def create_app(settings: Settings | None = None):
             db.commit()
         for job_id in jobs:
             matching.run_or_wake(job_id)
+        return item_out(item, db, user)
+
+    @app.post('/api/v1/items/{item_id}/sale-feedback', status_code=201)
+    def create_sale_feedback(item_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            item = get_item(db, item_id)
+            if item.seller_id == user.id:
+                raise HTTPException(403, '不能反馈自己的商品')
+            if item.status not in {'ACTIVE', 'RESERVED'}:
+                raise HTTPException(409, '商品已经不在售，无需反馈')
+            if db.scalar(select(SaleFeedback).where(SaleFeedback.reporter_id == user.id,
+                         SaleFeedback.item_id == item.id)):
+                raise HTTPException(409, '你已反馈过这件商品')
+            feedback = SaleFeedback(reporter_id=user.id, item_id=item.id)
+            db.add(feedback)
+            db.flush()
+            log(db, user, 'sale.feedback', feedback.id)
+            db.commit()
+        return {'id': feedback.id, 'status': feedback.status}
+
+    @app.get('/api/v1/items/{item_id}/sale-feedback')
+    def sale_feedback_list(item_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        item = get_item(db, item_id)
+        if item.seller_id != user.id:
+            raise HTTPException(403, '仅卖家可查看反馈')
+        return [{'id': row.id, 'status': row.status, 'created_at': iso(row.created_at)}
+                for row in db.scalars(select(SaleFeedback).where(SaleFeedback.item_id == item_id,
+                                       SaleFeedback.status == 'OPEN').order_by(SaleFeedback.created_at.desc()))]
+
+    @app.post('/api/v1/items/{item_id}/sale-feedback/{feedback_id}/review')
+    def review_sale_feedback(item_id: str, feedback_id: str, data: DealAction,
+                             db: Session = Depends(get_db), user=Depends(require_user)):
+        if data.action not in {'sold', 'decline'}:
+            raise HTTPException(422, '请选择确认售出或驳回反馈')
+        with mutation_lock:
+            item = get_item(db, item_id)
+            if item.seller_id != user.id:
+                raise HTTPException(403, '仅卖家可处理反馈')
+            feedback = db.get(SaleFeedback, feedback_id)
+            if not feedback or feedback.item_id != item_id or feedback.status != 'OPEN':
+                raise HTTPException(404, '待处理反馈不存在')
+            feedback.status = 'CONFIRMED' if data.action == 'sold' else 'DISMISSED'
+            if data.action == 'sold':
+                if item.status not in {'ACTIVE', 'RESERVED'}:
+                    raise HTTPException(409, '商品当前不可确认售出')
+                item.status = 'SOLD'
+                db.execute(update(SaleFeedback).where(SaleFeedback.item_id == item.id,
+                           SaleFeedback.status == 'OPEN').values(status='CONFIRMED'))
+                db.execute(update(Conversation).where(Conversation.item_id == item.id,
+                           Conversation.deal_status == 'RESERVED').values(deal_status='SOLD'))
+                db.execute(update(Conversation).where(Conversation.item_id == item.id,
+                           Conversation.deal_status == 'REQUESTED').values(deal_status='DECLINED'))
+            log(db, user, 'sale.feedback.'+data.action, feedback.id)
+            db.commit()
         return item_out(item, db, user)
 
     @app.post('/api/v1/items/{item_id}/favorite')
@@ -525,6 +734,24 @@ def create_app(settings: Settings | None = None):
     @app.get('/api/v1/intents/my')
     def my_intents(db: Session = Depends(get_db), user=Depends(require_user)):
         return [intent_out(i, db) for i in db.scalars(select(Intent).where(Intent.buyer_id == user.id).order_by(Intent.created_at.desc()))]
+
+    @app.post('/api/v1/intents/{intent_id}/complete')
+    def complete_intent(intent_id: str, data: IntentComplete,
+                        db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            intent = owned_intent(db, intent_id, user)
+            if intent.status == 'COMPLETED':
+                raise HTTPException(409, '该代蹲任务已经结束')
+            if data.item_id:
+                notice = db.scalar(select(Notification).where(Notification.intent_id == intent_id,
+                                   Notification.item_id == data.item_id))
+                if not notice:
+                    raise HTTPException(422, '只能选择此任务曾匹配的商品')
+            intent.status = 'COMPLETED'
+            intent.completed_item_id = data.item_id
+            log(db, user, 'intent.fulfilled', intent.id, data.item_id or '')
+            db.commit()
+            return intent_out(intent, db)
 
     @app.patch('/api/v1/intents/{intent_id}')
     def change_intent(intent_id: str, data: IntentChange, db: Session = Depends(get_db), user=Depends(require_user)):
@@ -640,6 +867,37 @@ def create_app(settings: Settings | None = None):
                  'risk': r.risk, 'evidence': r.evidence, 'status': r.status, 'created_at': iso(r.created_at)}
                 for r in db.scalars(select(Report).order_by(Report.created_at.desc()).limit(100))]
 
+    @app.get('/api/v1/admin/chat-reports')
+    def admin_chat_reports(db: Session = Depends(get_db), user=Depends(require_admin)):
+        rows = db.scalars(select(ChatReport).order_by(ChatReport.created_at.desc()).limit(100))
+        result = []
+        for report in rows:
+            message = db.get(ChatMessage, report.message_id)
+            conversation = db.get(Conversation, message.conversation_id)
+            result.append({'id': report.id, 'reason': report.reason, 'status': report.status,
+                           'created_at': iso(report.created_at), 'item_title': db.get(Item, conversation.item_id).title,
+                           'message_id': message.id, 'message_body': message.body,
+                           'sender': user_out(db.get(User, message.sender_id))})
+        return result
+
+    @app.post('/api/v1/admin/chat-reports/{report_id}/review')
+    def review_chat_report(report_id: str, data: ChatReviewAction,
+                           db: Session = Depends(get_db), user=Depends(require_admin)):
+        with mutation_lock:
+            report = db.get(ChatReport, report_id)
+            if not report:
+                raise HTTPException(404, '举报不存在')
+            if report.status != 'OPEN':
+                raise HTTPException(409, '该举报已处理')
+            message = db.get(ChatMessage, report.message_id)
+            if data.action == 'hide':
+                message.hidden_at = now()
+            report.status = 'HIDDEN' if data.action == 'hide' else 'DISMISSED'
+            report.reviewed_at = now()
+            log(db, user, 'admin.chat.'+data.action, message.id, data.note)
+            db.commit()
+        return {'ok': True}
+
     @app.post('/api/v1/admin/reports/{report_id}/review')
     def review(report_id: str, data: ReviewAction, db: Session = Depends(get_db), user=Depends(require_admin)):
         with mutation_lock:
@@ -651,6 +909,10 @@ def create_app(settings: Settings | None = None):
                 if item.status == 'SOLD':
                     raise HTTPException(409, '已售商品不能隐藏后重新上架')
                 item.status = 'BANNED'
+                db.execute(update(Conversation).where(Conversation.item_id == item.id,
+                           Conversation.deal_status == 'RESERVED').values(deal_status='CANCELED'))
+                db.execute(update(Conversation).where(Conversation.item_id == item.id,
+                           Conversation.deal_status == 'REQUESTED').values(deal_status='DECLINED'))
             elif data.action == 'restore':
                 if item.status != 'BANNED':
                     raise HTTPException(409, '仅可恢复审核隐藏的商品')

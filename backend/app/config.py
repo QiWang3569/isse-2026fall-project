@@ -32,6 +32,7 @@ class Settings:
     smtp_user: str = field(default_factory=lambda: os.getenv('SMTP_USER', ''))
     smtp_password: str = field(default_factory=lambda: os.getenv('SMTP_PASSWORD', ''))
     smtp_from: str = field(default_factory=lambda: os.getenv('SMTP_FROM', ''))
+    chat_retention_days: int = field(default_factory=lambda: int(os.getenv('CHAT_RETENTION_DAYS', '180')))
 
     def __post_init__(self):
         if self.ai_mode not in {'local', 'remote'}:
@@ -50,6 +51,8 @@ class Settings:
             raise ValueError('Model timeout must be 1–120 seconds; match attempts must be 1–5')
         if not 0 <= self.threshold <= 1:
             raise ValueError('MATCH_THRESHOLD must be between 0 and 1')
+        if not 30 <= self.chat_retention_days <= 3650:
+            raise ValueError('CHAT_RETENTION_DAYS must be between 30 and 3650')
 
     @property
     def email_auth_ready(self):

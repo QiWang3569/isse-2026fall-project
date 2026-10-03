@@ -4,9 +4,13 @@ from sqlalchemy import inspect, text
 
 def upgrade_buyer_agent(engine):
     additions = {
-        'users': {'email': 'VARCHAR(254)'},
+        'users': {'email': 'VARCHAR(254)', 'bio': "VARCHAR(160) NOT NULL DEFAULT ''",
+                  'avatar_color': "VARCHAR(20) NOT NULL DEFAULT 'sage'"},
         'buyer_intents': {'excluded_keywords': "JSON NOT NULL DEFAULT '[]'",
-                         'preferences': "JSON NOT NULL DEFAULT '[]'"},
+                         'preferences': "JSON NOT NULL DEFAULT '[]'",
+                         'completed_item_id': 'VARCHAR(36)'},
+        'conversations': {'deal_status': "VARCHAR(20) NOT NULL DEFAULT 'NONE'"},
+        'chat_messages': {'hidden_at': 'TIMESTAMP'},
         'match_notifications': {'verdict': "VARCHAR(20) NOT NULL DEFAULT 'MATCH'",
                                 'questions': "JSON NOT NULL DEFAULT '[]'",
                                 'evidence': "JSON NOT NULL DEFAULT '[]'",

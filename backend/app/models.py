@@ -26,6 +26,8 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default='student')
     contact: Mapped[str] = mapped_column(String(100), default='')
     email: Mapped[str | None] = mapped_column(String(254), unique=True, nullable=True)
+    bio: Mapped[str] = mapped_column(String(160), default='')
+    avatar_color: Mapped[str] = mapped_column(String(20), default='sage')
 
 
 class EmailChallenge(Base):
@@ -55,6 +57,7 @@ class Conversation(Base):
     seller_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     last_message_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    deal_status: Mapped[str] = mapped_column(String(20), default='NONE')
     __table_args__ = (UniqueConstraint('item_id', 'buyer_id'), Index('idx_conversation_buyer', 'buyer_id', 'last_message_at'), Index('idx_conversation_seller', 'seller_id', 'last_message_at'))
 
 
@@ -66,7 +69,28 @@ class ChatMessage(Base):
     body: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    hidden_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     __table_args__ = (Index('idx_chat_messages_conversation', 'conversation_id', 'created_at'),)
+
+
+class UserBlock(Base):
+    __tablename__ = 'user_blocks'
+    blocker_id: Mapped[str] = mapped_column(ForeignKey('users.id'), primary_key=True)
+    blocked_id: Mapped[str] = mapped_column(ForeignKey('users.id'), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class ChatReport(Base):
+    __tablename__ = 'chat_reports'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    reporter_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    message_id: Mapped[str] = mapped_column(ForeignKey('chat_messages.id'))
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default='OPEN')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    __table_args__ = (UniqueConstraint('reporter_id', 'message_id'),
+                      Index('idx_chat_reports_status', 'status', 'created_at'))
 
 
 class Item(Base):
@@ -103,11 +127,22 @@ class Intent(Base):
     preferences: Mapped[list] = mapped_column(JSON, default=list)
     condition_grade: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default='ACTIVE')
+    completed_item_id: Mapped[str | None] = mapped_column(ForeignKey('items.id'), nullable=True)
     embedding: Mapped[list | None] = mapped_column(JSON().with_variant(Vector(1536), 'postgresql'), nullable=True)
     embedding_model: Mapped[str] = mapped_column(String(100), default='local-keyword')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     expires_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: now() + timedelta(days=14))
     __table_args__ = (Index('idx_intents_active', 'status', 'expires_at'),)
+
+
+class SaleFeedback(Base):
+    __tablename__ = 'sale_feedback'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    reporter_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    item_id: Mapped[str] = mapped_column(ForeignKey('items.id'))
+    status: Mapped[str] = mapped_column(String(20), default='OPEN')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    __table_args__ = (UniqueConstraint('reporter_id', 'item_id'),)
 
 
 class Notification(Base):

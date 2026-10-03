@@ -142,4 +142,6 @@ def test_pre_email_user_table_gets_additive_upgrade(tmp_path):
     with TestClient(create_app(settings)) as client:
         login(client)
         assert client.get('/api/v1/auth/me').json()['user']['email'] is None
+        assert client.get('/api/v1/auth/me').json()['user']['bio'] == ''
+        assert client.get('/api/v1/auth/me').json()['user']['avatar_color'] == 'sage'
         assert client.get('/api/v1/conversations').json() == []

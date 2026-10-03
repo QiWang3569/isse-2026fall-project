@@ -126,6 +126,15 @@ class EmailCodeVerify(EmailCodeRequest):
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
 
 
+class ProfileUpdate(StrictModel):
+    nickname: str = Field(min_length=2, max_length=50)
+    campus: str
+    bio: str = Field(default='', max_length=160)
+    avatar_color: Literal['sage', 'blue', 'peach', 'lavender'] = 'sage'
+
+    campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
+
+
 class ChatMessageCreate(StrictModel):
     body: str = Field(min_length=1, max_length=2000)
 
@@ -135,3 +144,21 @@ class ChatMessageCreate(StrictModel):
         if not value.strip():
             raise ValueError('消息不能为空')
         return value.strip()
+
+
+class ChatReportCreate(StrictModel):
+    reason: str = Field(min_length=5, max_length=1000)
+
+
+class ChatReviewAction(StrictModel):
+    action: Literal['hide', 'dismiss']
+    note: str = Field(min_length=5, max_length=500)
+    confirmed: Literal[True]
+
+
+class DealAction(StrictModel):
+    action: Literal['request', 'reserve', 'decline', 'cancel', 'sold', 'confirm']
+
+
+class IntentComplete(StrictModel):
+    item_id: str | None = None
