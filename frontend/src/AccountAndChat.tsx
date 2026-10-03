@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Mail, MessageCircle, Send } from "lucide-react";
+import { ArrowLeft, ArrowRight, Flag, Mail, MessageCircle, Send, ShieldOff } from "lucide-react";
 import { api, statusText, type ChatMessage, type Conversation, type Item, type Meta, type User } from "./api";
 import { Empty, ProductArt } from "./components";
 
@@ -89,6 +89,8 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [reportMessageId, setReportMessageId] = useState<string | null>(null);
+  const [reportReason, setReportReason] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
   const loadingOlder = useRef(false);
   const handledItem = useRef<string | null>(null);
@@ -140,8 +142,46 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
     if (loadingOlder.current) { loadingOlder.current = false; return; }
     bottom.current?.scrollIntoView({ block: "end" });
   }, [activeId, messages.length]);
-  const active = conversations.find((conversation) => conversation.id === activeId) ??
-    (recentConversation?.id === activeId ? recentConversation : null);
+  const listedConversation = conversations.find((conversation) => conversation.id === activeId) ?? null;
+  useEffect(() => {
+    if (listedConversation && recentConversation?.id === listedConversation.id &&
+      listedConversation.deal_status === recentConversation.deal_status &&
+      listedConversation.blocked === recentConversation.blocked &&
+      listedConversation.blocked_by_me === recentConversation.blocked_by_me) {
+      setRecentConversation(null);
+    }
+  }, [listedConversation, recentConversation]);
+  const active = recentConversation?.id === activeId ? recentConversation : listedConversation;
+  async function changeDeal(action: "request" | "reserve" | "decline" | "cancel" | "sold" | "confirm") {
+    if (!activeId) return;
+    setBusy(true); setError("");
+    try {
+      const result = await api<Conversation>(`/conversations/${activeId}/deal`, "POST", { action: action.toLowerCase() });
+      setRecentConversation(result); refresh();
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+  async function toggleBlock() {
+    if (!activeId || !active) return;
+    setBusy(true); setError("");
+    try {
+      await api(`/conversations/${activeId}/block`, active.blocked_by_me ? "DELETE" : "POST");
+      setRecentConversation({ ...active, blocked_by_me: !active.blocked_by_me,
+        blocked: !active.blocked_by_me || (active.blocked && !active.blocked_by_me) });
+      refresh();
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
+  async function submitReport(event: FormEvent) {
+    event.preventDefault();
+    if (!activeId || !reportMessageId) return;
+    setBusy(true); setError("");
+    try {
+      await api(`/conversations/${activeId}/messages/${reportMessageId}/reports`, "POST", { reason: reportReason });
+      setReportMessageId(null); setReportReason("");
+    } catch (cause) { setError((cause as Error).message); }
+    finally { setBusy(false); }
+  }
   async function send(event: FormEvent) {
     event.preventDefault();
     if (!draft.trim() || (!activeId && !newItem)) return;
@@ -186,7 +226,7 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
         <div className="chat-list" aria-label="会话列表">
           {conversations.length ? conversations.map((conversation) => (
             <button key={conversation.id} className={`chat-list-item ${activeId === conversation.id ? "active" : ""}`}
-              onClick={() => { setActiveId(conversation.id); setRecentConversation(conversation); setMessages([]); setLoadedOlder(false); setNewItem(null); setDraft(""); setError(""); onStarted(); }}>
+              onClick={() => { setActiveId(conversation.id); setRecentConversation(conversation); setMessages([]); setLoadedOlder(false); setNewItem(null); setDraft(""); setReportMessageId(null); setError(""); onStarted(); }}>
               <span className="avatar">{conversation.counterpart.nickname[0]}</span>
               <span className="chat-list-text"><strong>{conversation.counterpart.nickname}</strong><small>{conversation.item_title}</small>
                 <span>{conversation.last_message?.body ?? "开始沟通"}</span></span>
@@ -200,21 +240,52 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
               <button type="button" className="chat-back" onClick={() => { setActiveId(null); setNewItem(null); onStarted(); }} aria-label="返回会话列表"><ArrowLeft size={18} /></button>
               <div><strong>{active?.counterpart.nickname ?? newItem?.seller.nickname}</strong>
                 <small>{active?.item_title ?? newItem?.title} · {statusText[active?.item_status ?? newItem?.status ?? ""] ?? "状态未知"}</small></div>
+              {active && <button type="button" className="text-button" disabled={busy} onClick={() => void toggleBlock()}>
+                <ShieldOff size={15} />{active.blocked_by_me ? "解除拉黑" : "拉黑"}
+              </button>}
             </div>
+            {active && <div className="chat-deal-actions">
+              {active.deal_status === "REQUESTED" && <span>买家已提出预订，等待卖家确认</span>}
+              {active.deal_status === "RESERVED" && <span>卖家已确认预订，等待交接</span>}
+              {active.deal_status === "SOLD" && <span>卖家已标记售出，等待买家确认</span>}
+              {active.deal_status === "CONFIRMED" && <span>双方已确认成交</span>}
+              {active.deal_status === "DECLINED" && <span>卖家已拒绝预订</span>}
+              {active.deal_status === "CANCELED" && <span>预订已取消</span>}
+              {user.id === active.buyer_id && ["NONE", "DECLINED", "CANCELED"].includes(active.deal_status) && active.item_status === "ACTIVE" &&
+                <button className="text-button" disabled={busy || active.blocked} onClick={() => void changeDeal("request")}>申请预订</button>}
+              {user.id === active.seller_id && active.deal_status === "REQUESTED" && <>
+                <button className="text-button" disabled={busy} onClick={() => void changeDeal("reserve")}>确认预订</button>
+                <button className="text-button" disabled={busy} onClick={() => void changeDeal("decline")}>拒绝预订</button></>}
+              {user.id === active.buyer_id && ["REQUESTED", "RESERVED"].includes(active.deal_status) &&
+                <button className="text-button" disabled={busy} onClick={() => void changeDeal("cancel")}>取消预订</button>}
+              {user.id === active.seller_id && active.deal_status === "RESERVED" &&
+                <button className="text-button" disabled={busy} onClick={() => void changeDeal("sold")}>确认售出</button>}
+              {user.id === active.buyer_id && active.deal_status === "SOLD" &&
+                <button className="text-button" disabled={busy} onClick={() => void changeDeal("confirm")}>确认已收到</button>}
+            </div>}
+            {active?.blocked && <p className="hint">双方已停止联系。聊天记录仍可查看，不能发送新消息。</p>}
             <div className="chat-history" aria-live="polite">
               {hasMore && <button className="text-button" onClick={() => void loadOlder()}>加载更早的消息</button>}
               {newItem && <div className="chat-start-item"><ProductArt item={newItem} /><span>{newItem.title}</span><ArrowRight size={16} /></div>}
               {messages.map((message) => <div key={message.id} className={`chat-bubble ${message.sender_id === user.id ? "own" : ""}`}>
                 <p>{message.body}</p><time>{new Date(message.created_at).toLocaleString("zh-CN")}</time>
+                {message.sender_id !== user.id && !message.hidden && <button className="text-button" type="button"
+                  onClick={() => { setReportMessageId(message.id); setReportReason(""); }}><Flag size={13} />举报消息</button>}
               </div>)}
               <div ref={bottom} />
             </div>
+            {reportMessageId && <form className="chat-report-form" onSubmit={(event) => void submitReport(event)}>
+              <label>举报原因<input required minLength={5} maxLength={1000} value={reportReason}
+                onChange={(event) => setReportReason(event.target.value)} placeholder="请说明这条消息的问题" /></label>
+              <button className="button secondary" disabled={busy}>提交举报</button>
+              <button type="button" className="text-button" onClick={() => setReportMessageId(null)}>取消</button>
+            </form>}
             <form className="chat-compose" onSubmit={(event) => void send(event)}>
               <label className="sr-only" htmlFor="chat-message">消息内容</label>
-              <textarea id="chat-message" value={draft} maxLength={2000} rows={3}
+              <textarea id="chat-message" value={draft} maxLength={2000} rows={3} disabled={active?.blocked}
                 placeholder="输入想向对方确认的问题…" onChange={(event) => setDraft(event.target.value)} />
               <div><span>请勿提前转账；交接前当面核实商品。</span>
-                <button className="button primary" disabled={busy || !draft.trim()}><Send size={15} />确认发送</button></div>
+                <button className="button primary" disabled={busy || active?.blocked || !draft.trim()}><Send size={15} />确认发送</button></div>
               {error && <p className="form-error" role="alert">{error}</p>}
             </form>
           </> : <Empty title="选择一条会话" text="你与其他同学的商品沟通会显示在这里。" />}

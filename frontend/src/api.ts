@@ -4,6 +4,8 @@ export type User = {
   campus: string;
   role: string;
   email?: string | null;
+  bio?: string;
+  avatar_color?: "sage" | "blue" | "peach" | "lavender";
 };
 export type Item = {
   id: string;
@@ -23,6 +25,7 @@ export type Item = {
   is_favorite: boolean;
   is_owner: boolean;
   is_demo: boolean;
+  sale_feedback_count: number;
 };
 export type Meta = {
   categories: string[];
@@ -41,10 +44,13 @@ export type ChatMessage = {
   body: string;
   created_at: string;
   read_at: string | null;
+  hidden: boolean;
 };
 export type Conversation = {
   id: string;
   item_id: string;
+  buyer_id: string;
+  seller_id: string;
   item_title: string;
   item_status: string;
   item_image: string | null;
@@ -52,6 +58,9 @@ export type Conversation = {
   last_message: ChatMessage | null;
   unread_count: number;
   updated_at: string;
+  blocked: boolean;
+  blocked_by_me: boolean;
+  deal_status: "NONE" | "REQUESTED" | "RESERVED" | "DECLINED" | "CANCELED" | "SOLD" | "CONFIRMED";
 };
 export type Parsed = {
   category: string | null;
@@ -72,6 +81,18 @@ export type Intent = Parsed & {
   expires_at: string;
   matching_mode: string;
   matching_state: "PENDING" | "RUNNING" | "DONE" | "FAILED";
+  completed_item_id: string | null;
+};
+
+export type ChatReport = {
+  id: string;
+  reason: string;
+  status: string;
+  created_at: string;
+  item_title: string;
+  message_id: string;
+  message_body: string;
+  sender: User;
 };
 export type Notice = {
   id: string;

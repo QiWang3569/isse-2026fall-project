@@ -23,7 +23,6 @@ import {
   LogOut,
   MapPin,
   Monitor,
-  Package,
   Pause,
   Play,
   Plus,
@@ -40,6 +39,7 @@ import {
   RefreshCw,
   CheckCheck,
   MessageCircle,
+  UserRound,
 } from "lucide-react";
 import {
   api,
@@ -50,6 +50,7 @@ import {
   type Notice,
   type Wanted,
   type Report,
+  type ChatReport,
   type Log,
   type Conversation,
   money,
@@ -67,16 +68,14 @@ import {
 } from "./components";
 import { IntentForm, PublishForm, WantedForm } from "./forms";
 import { ChatCenter, EmailSignIn } from "./AccountAndChat";
+import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
 
 const nav = [
   { key: "market", label: "逛逛校园", icon: Compass },
-  { key: "intents", label: "我的代蹲", icon: Sparkles },
-  { key: "messages", label: "站内消息", icon: MessageCircle },
   { key: "wanted", label: "求购看板", icon: Sprout },
-  { key: "favorites", label: "我的收藏", icon: Heart },
-  { key: "mine", label: "我发布的", icon: Package },
+  { key: "profile", label: "我的主页", icon: UserRound },
 ];
-type View = "market" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "admin";
+type View = "market" | "profile" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "admin";
 type ModalName =
   | "login"
   | "intent"
@@ -88,6 +87,7 @@ type ModalName =
   | null;
 const validViews = [
   "market",
+  "profile",
   "intents",
   "messages",
   "wanted",
@@ -372,17 +372,25 @@ export default function App() {
   );
   const wanted = useResource<Wanted[]>("/wanted/", revision, view === "wanted");
   const conversations = useResource<Conversation[]>("/conversations", revision, !!user, true);
+  const profileOverview = useResource<{ intents: number; listings: number; favorites: number }>(
+    "/users/me/overview", revision, view === "profile" && !!user,
+  );
   const taskNotices = useResource<Notice[]>(
     `/notifications/?intent_id=${encodeURIComponent(noticeIntent?.id ?? "")}`,
     revision,
     modal === "notifications" && !!noticeIntent && !!user,
     true,
   );
+  const saleFeedback = useResource<{ id: string; status: string; created_at: string }[]>(
+    `/items/${selected?.id ?? ""}/sale-feedback`, revision,
+    modal === "detail" && !!selected?.is_owner && !!selected?.sale_feedback_count,
+  );
   const visibleNotices = noticeIntent
     ? (taskNotices.data ?? []).filter((n) => n.intent_id === noticeIntent.id)
     : notices;
   const unread = notices.filter((n) => !n.is_read).length;
   const chatUnread = (conversations.data ?? []).reduce((sum, c) => sum + c.unread_count, 0);
+  const personalView = ["profile", "intents", "messages", "favorites", "mine"].includes(view);
 
   if (!meta)
     return (
@@ -419,7 +427,7 @@ export default function App() {
           {nav.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
-              className={`nav-item ${view === key ? "active" : ""}`}
+              className={`nav-item ${view === key || (key === "profile" && personalView) ? "active" : ""}`}
               onClick={() => {
                 setCategory("");
                 setQuery("");
@@ -430,8 +438,7 @@ export default function App() {
             >
               <Icon size={20} strokeWidth={1.7} />
               <span>{label}</span>
-              {key === "intents" && <span className="nav-new">NEW</span>}
-              {key === "messages" && chatUnread > 0 && <span className="nav-new">{chatUnread}</span>}
+              {key === "profile" && chatUnread > 0 && <span className="nav-new">{chatUnread}</span>}
             </button>
           ))}
           {user?.role === "admin" && (
@@ -512,15 +519,25 @@ export default function App() {
             </button>
             <button
               className="avatar-button"
-              onClick={() => setModal("login")}
-              aria-label={user ? `当前账号 ${user.nickname}` : "登录或注册"}
+              onClick={() => user ? navigate("profile") : setModal("login")}
+              aria-label={user ? `查看${user.nickname}的个人主页${chatUnread ? `，${chatUnread} 条未读消息` : ""}` : "登录或注册"}
             >
-              <span className="avatar">{user ? user.nickname[0] : "访"}</span>
-              <span>{user?.nickname || "登录/注册"}</span>
+              <span className={`avatar avatar-color-${user?.avatar_color ?? "sage"}`}>{user ? user.nickname[0] : "访"}</span>
+              <span className="avatar-name">{user?.nickname || "登录/注册"}</span>
+              {user && chatUnread > 0 && <span className="avatar-unread" aria-hidden="true" />}
             </button>
           </div>
         </header>
         <main>
+          {personalView && user && <ProfileNav view={view as PersonalView} onNavigate={navigate} unread={chatUnread} />}
+          {view === "profile" && (user ? <ProfileHome
+            user={user} meta={meta} overview={profileOverview.data}
+            unread={chatUnread} conversations={conversations.data?.length ?? 0}
+            onNavigate={navigate} onAccount={() => setModal("login")}
+            onUpdated={(account) => { setUser(account); setToast("个人资料已更新"); refresh(); }}
+            onError={setToast}
+          /> : <Empty title="登录后查看个人主页" text="使用北大邮箱登录，集中管理你的代蹲、消息、收藏与发布。"
+            action="登录或注册" onAction={() => setModal("login")} />)}
           {view === "market" && (
             <form className="mobile-search" onSubmit={searchSubmit}>
               <Search size={18} />
@@ -994,6 +1011,8 @@ export default function App() {
                         </button>
                         {i.status !== "COMPLETED" && (
                           <div className="task-actions">
+                            <button disabled={busy} onClick={() => void operate(
+                              () => api(`/intents/${i.id}/complete`, "POST", {}), "已记录买到商品，代蹲已结束")}>已买到</button>
                             <button
                               disabled={busy}
                               onClick={() =>
@@ -1350,7 +1369,7 @@ export default function App() {
                   <div>
                     <span className="task-status">
                       {!n.available
-                        ? "这件商品已不在售"
+                        ? `${statusText[n.item.status] ?? "不在售"}，暂不可咨询`
                         : n.verdict === "UNCERTAIN"
                           ? "可能合适，部分条件待确认"
                           : "有好物符合你的期待"}
@@ -1397,6 +1416,11 @@ export default function App() {
                         查看商品
                         <ArrowRight size={14} />
                       </button>
+                      {noticeIntent && noticeIntent.status !== "COMPLETED" && <button className="text-button" disabled={busy}
+                        onClick={() => void operate(async () => {
+                          await api(`/intents/${noticeIntent.id}/complete`, "POST", { item_id: n.item.id });
+                          setModal(null);
+                        }, "已记录买到这件商品，代蹲已结束")}>已买到这件</button>}
                       {!n.is_read && (
                         <button
                           className="text-button"
@@ -1532,6 +1556,16 @@ export default function App() {
               </div>
               {selected.is_owner ? (
                 <div className="detail-actions">
+                  {selected.sale_feedback_count > 0 && <p className="hint">{selected.sale_feedback_count} 位买家反馈商品可能已售。请核实后更新状态。</p>}
+                  {saleFeedback.data?.map((feedback) => <div className="sale-feedback-row" key={feedback.id}>
+                    <span>收到反馈：{new Date(feedback.created_at).toLocaleString("zh-CN")}</span>
+                    <button className="text-button" disabled={busy} onClick={() => void operate(async () => {
+                      setSelected(await api<Item>(`/items/${selected.id}/sale-feedback/${feedback.id}/review`, "POST", { action: "sold" }));
+                    }, "已确认售出")}>确认已售</button>
+                    <button className="text-button" disabled={busy} onClick={() => void operate(async () => {
+                      setSelected(await api<Item>(`/items/${selected.id}/sale-feedback/${feedback.id}/review`, "POST", { action: "decline" }));
+                    }, "已驳回反馈")}>仍在售</button>
+                  </div>)}
                   {["ACTIVE", "RESERVED", "EXPIRED"].includes(
                     selected.status,
                   ) && (
@@ -1602,6 +1636,10 @@ export default function App() {
                 </div>
               ) : (
                 <div className="detail-actions">
+                  {["ACTIVE", "RESERVED"].includes(selected.status) && <button className="button secondary" disabled={busy}
+                    onClick={() => { if (!needUser()) return; void operate(
+                      () => api(`/items/${selected.id}/sale-feedback`, "POST"),
+                      "已通知卖家核实商品是否售出"); }}><Flag size={16} />反馈已售</button>}
                   <button className="button primary" disabled={selected.status !== "ACTIVE"}
                     onClick={() => {
                       if (!needUser()) return;
@@ -1763,6 +1801,9 @@ function Admin({
     revision,
     user?.role === "admin",
   );
+  const chatReports = useResource<ChatReport[]>(
+    "/admin/chat-reports", revision, user?.role === "admin",
+  );
   const [busy, setBusy] = useState(false);
   if (user?.role !== "admin")
     return (
@@ -1791,6 +1832,19 @@ function Admin({
       setBusy(false);
     }
   }
+  async function reviewChat(e: FormEvent<HTMLFormElement>, id: string) {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const data = new FormData(form);
+    setBusy(true);
+    try {
+      await api(`/admin/chat-reports/${id}/review`, "POST", {
+        action: data.get("action"), note: data.get("note"), confirmed: data.get("confirmed") === "on",
+      });
+      notify("聊天举报已处理"); form.reset(); refresh();
+    } catch (cause) { notify((cause as Error).message); }
+    finally { setBusy(false); }
+  }
   return (
     <>
       <Intro
@@ -1802,6 +1856,19 @@ function Admin({
         <ShieldCheck size={18} />
         当前仅提供文字风险词与同名商品检查，不包含图片识别。举报本身不代表违规成立。
       </div>
+      <h2 className="audit-title">聊天消息举报</h2>
+      {chatReports.error && <p className="form-error">{chatReports.error}</p>}
+      {chatReports.data?.filter((r) => r.status === "OPEN").map((r) => <article className="review-card" key={r.id}>
+        <h3>{r.item_title} · {r.sender.nickname}</h3>
+        <p>被举报消息：{r.message_body}</p><p>举报原因：{r.reason}</p>
+        <form className="review-form" onSubmit={(e) => void reviewChat(e, r.id)}>
+          <label>处理方式<select name="action"><option value="dismiss">不采纳举报</option><option value="hide">隐藏消息</option></select></label>
+          <label>审核依据<input name="note" required minLength={5} maxLength={500} placeholder="写下核实结果" /></label>
+          <label className="check-label"><input type="checkbox" name="confirmed" required />我已核实，确认处理</label>
+          <button className="button primary" disabled={busy}>确认处理</button>
+        </form>
+      </article>)}
+      <h2 className="audit-title">商品举报</h2>
       {reports.loading ? (
         <Busy />
       ) : reports.error ? (
