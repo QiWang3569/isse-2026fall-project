@@ -28,10 +28,10 @@ def new_code() -> str:
 
 def send_verification_email(settings, recipient: str, code: str) -> None:
     message = EmailMessage()
-    message['Subject'] = '燕渡登录验证码'
+    message['Subject'] = '燕渡邮箱验证码'
     message['From'] = settings.smtp_from
     message['To'] = recipient
-    message.set_content(f'你的燕渡登录验证码是 {code}，10 分钟内有效。若非本人操作，请忽略此邮件。')
+    message.set_content(f'你的燕渡验证码是 {code}，可用于注册、登录或设置密码，10 分钟内有效。若非本人操作，请忽略此邮件。')
     context = ssl.create_default_context(cafile=certifi.where())
     if settings.smtp_port in {465, 994}:
         client = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=8, context=context)

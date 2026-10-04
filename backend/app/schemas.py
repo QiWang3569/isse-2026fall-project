@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 CATEGORIES = ['课程资料与书籍', '数码与影音', '校园出行与运动', '宿舍生活与家电', '美妆服饰与周边']
 CAMPUSES = ['燕园校本部', '万柳学区', '医学部', '昌平新校区', '不限校区']
@@ -119,11 +119,24 @@ class EmailCodeRequest(StrictModel):
 
 
 class EmailCodeVerify(EmailCodeRequest):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=False)
     code: str = Field(pattern=r'^\d{8}$')
     nickname: str = Field(default='', max_length=50)
     campus: str = '不限校区'
+    password: SecretStr | None = None
+    intent: Literal['register', 'login', 'auto'] = 'auto'
 
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
+
+
+class PasswordLogin(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    email: str = Field(max_length=254)
+    password: SecretStr
+
+
+class PasswordSet(PasswordLogin):
+    code: str = Field(pattern=r'^\d{8}$')
 
 
 class ProfileUpdate(StrictModel):

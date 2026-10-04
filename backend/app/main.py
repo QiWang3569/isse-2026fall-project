@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import create_engine, event, func, or_, select, text, update
+from sqlalchemy import create_engine, delete, event, func, or_, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import ROOT, Settings
@@ -24,8 +24,9 @@ from .email_auth import code_digest, new_code, normalize_pku_email, send_verific
 from .matching import MatchingRunner
 from .migrations import upgrade_buyer_agent
 from .retention import prune_chat
-from .models import ActionLog, Base, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, LoginSession, MatchJob, Notification, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
-from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate
+from .models import ActionLog, Base, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
+from .password_auth import DUMMY_HASH, hash_password, new_password_error, verify_password
+from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate
 from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, seed
 
 
@@ -139,7 +140,7 @@ def create_app(settings: Settings | None = None):
 
     def own_user_out(user):
         return {**user_out(user), 'email': user.email, 'bio': user.bio,
-                'avatar_color': user.avatar_color} if user else None
+                'avatar_color': user.avatar_color, 'has_password': bool(user.password_hash)} if user else None
 
     def begin_session(request, response, db, user):
         old = request.cookies.get('yandu_session', '')
@@ -270,23 +271,100 @@ def create_app(settings: Settings | None = None):
         if not settings.email_auth_ready:
             raise HTTPException(503, '邮件登录尚未配置，请联系管理员')
         with mutation_lock:
-            challenge = db.get(EmailChallenge, email)
-            if not challenge or challenge.expires_at <= now() or challenge.attempts >= 5:
-                raise HTTPException(400, '验证码无效或已过期，请重新获取')
-            expected = code_digest(settings.auth_secret, challenge.challenge_id, email, data.code)
-            if not hmac.compare_digest(challenge.code_hash, expected):
-                challenge.attempts += 1
-                db.commit()
-                raise HTTPException(400, '验证码无效或已过期，请重新获取')
+            challenge = valid_email_challenge(db, email, data.code)
             user = db.scalar(select(User).where(User.email == email))
+            if user and data.intent == 'register':
+                raise HTTPException(409, '该邮箱已注册，请切换到验证码登录或密码登录')
+            if not user and data.intent == 'login':
+                raise HTTPException(404, '该邮箱尚未注册，请切换到注册账号')
             if not user:
                 nickname = data.nickname.strip()
                 if len(nickname) < 2:
                     raise HTTPException(422, '首次注册请填写至少两个字的昵称')
-                user = User(email=email, nickname=nickname, campus=data.campus, role='student')
+                password = data.password.get_secret_value() if data.password is not None else ''
+                if error := new_password_error(password):
+                    raise HTTPException(422, error)
+                user = User(email=email, nickname=nickname, campus=data.campus, role='student',
+                            password_hash=hash_password(password))
                 db.add(user)
                 db.flush()
             db.delete(challenge)
+            return begin_session(request, response, db, user)
+
+    def valid_email_challenge(db, email, code):
+        challenge = db.get(EmailChallenge, email)
+        if not challenge or challenge.expires_at <= now() or challenge.attempts >= 5:
+            raise HTTPException(400, '验证码无效或已过期，请重新获取')
+        expected = code_digest(settings.auth_secret, challenge.challenge_id, email, code)
+        if not hmac.compare_digest(challenge.code_hash, expected):
+            challenge.attempts += 1
+            db.commit()
+            raise HTTPException(400, '验证码无效或已过期，请重新获取')
+        return challenge
+
+    def password_limit(db, key, limit, instant):
+        attempt = db.get(PasswordAttempt, key)
+        if attempt and instant - attempt.window_started_at < timedelta(minutes=15) and attempt.attempts >= limit:
+            raise HTTPException(429, '密码尝试次数过多，请 15 分钟后重试')
+        return attempt
+
+    def record_password_failure(db, key, attempt, instant):
+        if not attempt:
+            db.add(PasswordAttempt(key=key, attempts=1, window_started_at=instant))
+        elif instant - attempt.window_started_at >= timedelta(minutes=15):
+            attempt.attempts = 1
+            attempt.window_started_at = instant
+        else:
+            attempt.attempts += 1
+
+    @app.post('/api/v1/auth/password/login')
+    def password_login(data: PasswordLogin, request: Request, response: Response, db: Session = Depends(get_db)):
+        email = normalize_pku_email(data.email)
+        if not email:
+            raise HTTPException(422, '仅支持 @pku.edu.cn 或 @stu.pku.edu.cn 邮箱')
+        password = data.password.get_secret_value()
+        if not 1 <= len(password) <= 128:
+            raise HTTPException(422, '密码长度不能超过 128 个字符')
+        instant = now()
+        ip = request.client.host if request.client else 'unknown'
+        ip_key = 'ip:' + hashlib.sha256(ip.encode()).hexdigest()
+        with mutation_lock:
+            db.execute(delete(PasswordAttempt).where(PasswordAttempt.window_started_at < instant-timedelta(days=1)))
+            user = db.scalar(select(User).where(User.email == email))
+            user_key = 'mail:' + hashlib.sha256(email.encode()).hexdigest()
+            ip_attempt = password_limit(db, ip_key, 60, instant)
+            user_attempt = password_limit(db, user_key, 8, instant)
+            valid = verify_password(password, user.password_hash if user and user.password_hash else DUMMY_HASH)
+            if not user or not user.password_hash or not valid:
+                record_password_failure(db, ip_key, ip_attempt, instant)
+                record_password_failure(db, user_key, user_attempt, instant)
+                db.commit()
+                raise HTTPException(401, '邮箱或密码错误')
+            if user_attempt:
+                db.delete(user_attempt)
+            return begin_session(request, response, db, user)
+
+    @app.post('/api/v1/auth/password/set')
+    def set_password(data: PasswordSet, request: Request, response: Response, db: Session = Depends(get_db)):
+        email = normalize_pku_email(data.email)
+        if not email:
+            raise HTTPException(422, '仅支持 @pku.edu.cn 或 @stu.pku.edu.cn 邮箱')
+        password = data.password.get_secret_value()
+        if error := new_password_error(password):
+            raise HTTPException(422, error)
+        if not settings.email_auth_ready:
+            raise HTTPException(503, '邮件验证尚未配置，请联系管理员')
+        with mutation_lock:
+            challenge = valid_email_challenge(db, email, data.code)
+            user = db.scalar(select(User).where(User.email == email))
+            if not user:
+                raise HTTPException(409, '请先用邮箱验证码完成注册')
+            user.password_hash = hash_password(password)
+            db.delete(challenge)
+            db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
+            user_attempt = db.get(PasswordAttempt, 'mail:' + hashlib.sha256(email.encode()).hexdigest())
+            if user_attempt:
+                db.delete(user_attempt)
             return begin_session(request, response, db, user)
 
     @app.post('/api/v1/auth/demo')

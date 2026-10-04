@@ -47,7 +47,8 @@ def test_verified_pku_mail_creates_user_and_reuses_account(tmp_path, monkeypatch
         assert sent[0][0] == 'student@stu.pku.edu.cn'
         assert client.post('/api/v1/auth/email/verify', json={'email': sent[0][0], 'code': '00000000', 'nickname': '北大同学'}).status_code == 400
         result = client.post('/api/v1/auth/email/verify', json={'email': sent[0][0], 'code': sent[0][1],
-                            'nickname': '北大同学', 'campus': '燕园校本部'})
+                            'nickname': '北大同学', 'campus': '燕园校本部', 'intent': 'register',
+                            'password': 'CampusLife9'})
         assert result.status_code == 200, result.text
         user = result.json()['user']
         assert user['role'] == 'student' and user['email'] == sent[0][0]
@@ -58,12 +59,13 @@ def test_verified_pku_mail_creates_user_and_reuses_account(tmp_path, monkeypatch
             challenge = db.get(EmailChallenge, sent[0][0])
             assert challenge is None
         assert client.post('/api/v1/auth/email/request-code', json={'email': sent[0][0]}).status_code == 200
-        repeat = client.post('/api/v1/auth/email/verify', json={'email': sent[-1][0], 'code': sent[-1][1]})
+        repeat = client.post('/api/v1/auth/email/verify', json={'email': sent[-1][0], 'code': sent[-1][1],
+                              'intent': 'login'})
         assert repeat.status_code == 200 and repeat.json()['user']['id'] == user['id']
         client.post('/api/v1/auth/logout')
         assert client.post('/api/v1/auth/email/request-code', json={'email': 'someone@pku.edu.cn'}).status_code == 200
         existing = client.post('/api/v1/auth/email/verify', json={'email': sent[-1][0], 'code': sent[-1][1],
-                               'nickname': '另一位同学'})
+                               'nickname': '另一位同学', 'password': 'NewCampus9', 'intent': 'register'})
         assert existing.status_code == 200 and existing.json()['user']['id'] != user['id']
         with app.state.session_factory() as db:
             assert db.scalar(select(User).where(User.email == 'student@stu.pku.edu.cn')).role == 'student'
@@ -144,4 +146,7 @@ def test_pre_email_user_table_gets_additive_upgrade(tmp_path):
         assert client.get('/api/v1/auth/me').json()['user']['email'] is None
         assert client.get('/api/v1/auth/me').json()['user']['bio'] == ''
         assert client.get('/api/v1/auth/me').json()['user']['avatar_color'] == 'sage'
+        assert client.get('/api/v1/auth/me').json()['user']['has_password'] is False
+        with client.app.state.session_factory() as db:
+            assert db.get(User, 'demo-buyer').password_hash is None
         assert client.get('/api/v1/conversations').json() == []

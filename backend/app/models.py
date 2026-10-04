@@ -26,6 +26,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default='student')
     contact: Mapped[str] = mapped_column(String(100), default='')
     email: Mapped[str | None] = mapped_column(String(254), unique=True, nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     bio: Mapped[str] = mapped_column(String(160), default='')
     avatar_color: Mapped[str] = mapped_column(String(20), default='sage')
 
@@ -40,6 +41,13 @@ class EmailChallenge(Base):
     window_started_at: Mapped[datetime] = mapped_column(DateTime)
     sends_in_window: Mapped[int] = mapped_column(Integer, default=1)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PasswordAttempt(Base):
+    __tablename__ = 'password_attempts'
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime)
 
 
 class LoginSession(Base):
