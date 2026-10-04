@@ -4,6 +4,7 @@ export type User = {
   campus: string;
   role: string;
   email?: string | null;
+  has_password?: boolean;
   bio?: string;
   avatar_color?: "sage" | "blue" | "peach" | "lavender";
 };

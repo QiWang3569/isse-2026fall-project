@@ -67,7 +67,7 @@ import {
   ProductArt,
 } from "./components";
 import { IntentForm, PublishForm, WantedForm } from "./forms";
-import { ChatCenter, EmailSignIn } from "./AccountAndChat";
+import { AuthMethods, ChatCenter, PasswordSetup } from "./AccountAndChat";
 import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
 
 const nav = [
@@ -452,21 +452,9 @@ export default function App() {
           )}
         </nav>
         <div className="sidebar-bottom">
-          <div className="eco-note">
-            <Leaf size={23} strokeWidth={1.4} />
-            <h3>
-              让每一件好物
-              <br />
-              都有下一段故事。
-            </h3>
-            <p>少一点闲置，多一点连接。</p>
-            <span>
-              在燕园，把美好传下去 <ArrowRight size={13} />
-            </span>
-          </div>
           <div className="sidebar-caption">
             <ShieldCheck size={15} />
-            {meta.demo_mode ? "本地演示 · 北大邮箱可选" : "北大邮箱社区"}
+            {meta.demo_mode ? "本地演示 · 校园邮箱认证" : "北大邮箱社区"}
           </div>
         </div>
       </aside>
@@ -1236,12 +1224,12 @@ export default function App() {
           onClose={() => setModal(null)}
         >
           <div className="stack-form">
-            <p className="muted">
-              {user?.email ? `已验证邮箱：${user.email}` : "北大邮箱验证码登录。演示账号只用于本地体验。"}
-            </p>
-            {!user && <EmailSignIn meta={meta} onSignedIn={signedIn} />}
+            {user?.email && <p className="auth-description">已验证邮箱：{user.email}<br />
+              {user.has_password ? "已设置登录密码。重新验证邮箱可更换密码。" : "尚未设置登录密码。验证邮箱后即可设置。"}</p>}
+            {!user && <AuthMethods meta={meta} onSignedIn={signedIn} />}
+            {user?.email && <PasswordSetup meta={meta} initialEmail={user.email} onSignedIn={signedIn} />}
             {!user && meta.demo_mode && (
-              <div className="login-options">
+              <div className="demo-section"><p>或使用演示身份体验 <span>仅限本地演示</span></p><div className="login-options">
                 {[
                   {
                     id: "buyer",
@@ -1278,10 +1266,10 @@ export default function App() {
                       <strong>{p.name}</strong>
                       <small>{p.detail}</small>
                     </span>
-                    <ArrowRight size={17} />
+                    <span className="demo-action">进入</span>
                   </button>
                 ))}
-              </div>
+              </div></div>
             )}
             {user && (
               <button

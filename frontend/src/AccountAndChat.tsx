@@ -1,18 +1,35 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Flag, Mail, MessageCircle, Send, ShieldOff } from "lucide-react";
+import { ArrowLeft, ArrowRight, Flag, LockKeyhole, Mail, MessageCircle, Send, ShieldOff } from "lucide-react";
 import { api, statusText, type ChatMessage, type Conversation, type Item, type Meta, type User } from "./api";
 import { Empty, ProductArt } from "./components";
 
-export function EmailSignIn({ meta, onSignedIn }: { meta: Meta; onSignedIn: (user: User) => void }) {
-  const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
+const passwordValid = (value: string) => value.length >= 9 && value.length <= 128 && /[A-Za-z]/.test(value) && /[0-9]/.test(value);
+
+function PasswordRules({ value }: { value: string }) {
+  return <div className="password-rules" aria-label="密码要求">
+    <span className={value.length >= 9 && value.length <= 128 ? "met" : ""}>9–128 位</span>
+    <span className={/[A-Za-z]/.test(value) ? "met" : ""}>英文字母</span>
+    <span className={/[0-9]/.test(value) ? "met" : ""}>数字</span>
+  </div>;
+}
+
+export function EmailSignIn({ meta, intent, email, setEmail, code, setCode, sent, setSent, onSignedIn }: {
+  meta: Meta; intent: "register" | "login"; email: string; setEmail: (email: string) => void;
+  code: string; setCode: (code: string) => void; sent: boolean; setSent: (sent: boolean) => void;
+  onSignedIn: (user: User) => void;
+}) {
   const [nickname, setNickname] = useState("");
   const [campus, setCampus] = useState("燕园校本部");
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (intent === "register") {
+      if (!passwordValid(password)) { setError("密码需为 9–128 位，且同时包含英文字母和数字"); return; }
+      if (password !== confirm) { setError("两次输入的密码不一致"); return; }
+    }
     setBusy(true);
     setError("");
     try {
@@ -21,7 +38,7 @@ export function EmailSignIn({ meta, onSignedIn }: { meta: Meta; onSignedIn: (use
         setSent(true);
       } else {
         const result = await api<{ user: User }>("/auth/email/verify", "POST", {
-          email, code, nickname, campus,
+          email, code, intent, ...(intent === "register" ? { nickname, campus, password } : {}),
         });
         onSignedIn(result.user);
       }
@@ -33,13 +50,33 @@ export function EmailSignIn({ meta, onSignedIn }: { meta: Meta; onSignedIn: (use
   }
   return (
     <form className="stack-form email-sign-in" onSubmit={(event) => void submit(event)}>
-      <p className="muted">使用北大邮箱收取一次性验证码。首次验证会创建普通用户账号。</p>
+      <p className="auth-description">{intent === "register"
+        ? "填写资料并设置密码，再用北大邮箱验证码完成注册。"
+        : "已经有账号？收取一次性验证码即可登录。"}</p>
+      <div className="auth-steps" aria-label="操作步骤"><span className="current">1 · {intent === "register" ? "填写账号" : "填写邮箱"}</span><span className={sent ? "current" : ""}>2 · 验证邮箱</span></div>
       <label>
         北大邮箱
         <input type="email" autoComplete="email" required value={email}
           disabled={sent || busy} placeholder="name@pku.edu.cn 或 name@stu.pku.edu.cn"
           onChange={(event) => setEmail(event.target.value)} />
       </label>
+      {intent === "register" && <><div className="form-grid">
+          <label>
+            昵称
+            <input value={nickname} required minLength={2} maxLength={50} onChange={(event) => setNickname(event.target.value)} />
+          </label>
+          <label>
+            校区
+            <select value={campus} onChange={(event) => setCampus(event.target.value)}>
+              {meta.campuses.map((value) => <option key={value}>{value}</option>)}
+            </select>
+          </label>
+        </div>
+        <label>设置密码<input type="password" autoComplete="new-password" required minLength={9} maxLength={128}
+          value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+        <PasswordRules value={password} />
+        <label>确认密码<input type="password" autoComplete="new-password" required minLength={9} maxLength={128}
+          value={confirm} onChange={(event) => setConfirm(event.target.value)} /></label></>}
       {sent && <>
         <p className="hint" role="status">验证码已发送至 {email}，10 分钟内有效。</p>
         <label>
@@ -47,29 +84,130 @@ export function EmailSignIn({ meta, onSignedIn }: { meta: Meta; onSignedIn: (use
           <input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{8}"
             required value={code} onChange={(event) => setCode(event.target.value)} />
         </label>
-        <div className="form-grid">
-          <label>
-            昵称（首次注册必填）
-            <input value={nickname} maxLength={50} onChange={(event) => setNickname(event.target.value)} />
-          </label>
-          <label>
-            校区（首次注册使用）
-            <select value={campus} onChange={(event) => setCampus(event.target.value)}>
-              {meta.campuses.map((value) => <option key={value}>{value}</option>)}
-            </select>
-          </label>
-        </div>
-        <button type="button" className="text-button" onClick={() => { setSent(false); setCode(""); }}>
+        <button type="button" className="text-button auth-change-email" onClick={() => { setSent(false); setCode(""); setError(""); }}>
           更换邮箱或重新获取验证码
         </button>
       </>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      {!meta.email_auth_ready && <p className="form-error">邮件服务尚未配置，正式邮箱登录暂不可用。</p>}
+      {!meta.email_auth_ready && <p className="form-error">邮件服务尚未配置，邮箱验证暂不可用。</p>}
       <button type="submit" className="button primary full" disabled={busy || !meta.email_auth_ready}>
-        <Mail size={16} />{sent ? "验证并登录" : "发送验证码"}
+        <Mail size={16} />{busy ? "处理中…" : sent ? intent === "register" ? "创建账号" : "验证并登录" : "发送验证码"}
       </button>
     </form>
   );
+}
+
+export function AuthMethods({ meta, onSignedIn }: { meta: Meta; onSignedIn: (user: User) => void }) {
+  const [mode, setMode] = useState<"register" | "code" | "password" | "reset">("register");
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [sent, setSent] = useState(false);
+  return <div className="auth-methods">
+    <div className="auth-tabs" role="tablist" aria-label="账号入口">
+      <button type="button" id="auth-register" role="tab" aria-controls="auth-panel" aria-selected={mode === "register"} className={mode === "register" ? "active" : ""}
+        onClick={() => setMode("register")}>注册账号</button>
+      <button type="button" id="auth-code" role="tab" aria-controls="auth-panel" aria-selected={mode === "code"} className={mode === "code" ? "active" : ""}
+        onClick={() => setMode("code")}>验证码登录</button>
+      <button type="button" id="auth-password" role="tab" aria-controls="auth-panel" aria-selected={mode === "password" || mode === "reset"} className={mode === "password" || mode === "reset" ? "active" : ""}
+        onClick={() => { setMode("password"); setSent(false); setCode(""); }}>密码登录</button>
+    </div>
+    <div role="tabpanel" id="auth-panel" aria-labelledby={`auth-${mode === "reset" ? "password" : mode}`}>
+    {mode === "register" && <EmailSignIn key="register" meta={meta} intent="register" email={email} setEmail={setEmail}
+      code={code} setCode={setCode} sent={sent} setSent={setSent} onSignedIn={onSignedIn} />}
+    {mode === "code" && <EmailSignIn key="login" meta={meta} intent="login" email={email} setEmail={setEmail}
+      code={code} setCode={setCode} sent={sent} setSent={setSent} onSignedIn={onSignedIn} />}
+    {mode === "password" && <PasswordSignIn email={email} setEmail={setEmail} onSignedIn={onSignedIn} onReset={() => setMode("reset")} />}
+    {mode === "reset" && <>
+      <button type="button" className="text-button auth-back" onClick={() => setMode("password")}>← 返回密码登录</button>
+      <PasswordSetup meta={meta} onSignedIn={onSignedIn} />
+    </>}
+    </div>
+  </div>;
+}
+
+function PasswordSignIn({ email, setEmail, onSignedIn, onReset }: {
+  email: string; setEmail: (email: string) => void; onSignedIn: (user: User) => void; onReset: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api<{ user: User }>("/auth/password/login", "POST", { email, password });
+      onSignedIn(result.user);
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <form className="stack-form email-sign-in" onSubmit={(event) => void submit(event)}>
+    <p className="auth-description">已设置密码的北大邮箱账号，可以直接登录。</p>
+    <label>北大邮箱<input type="email" autoComplete="username" required maxLength={254} value={email}
+      placeholder="name@pku.edu.cn 或 name@stu.pku.edu.cn" onChange={(event) => setEmail(event.target.value)} /></label>
+    <label>登录密码<input type="password" autoComplete="current-password" required maxLength={128} value={password}
+      onChange={(event) => setPassword(event.target.value)} /></label>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <button className="button primary full" type="submit" disabled={busy}><LockKeyhole size={16} />{busy ? "登录中…" : "使用密码登录"}</button>
+    <button type="button" className="text-button auth-reset-link" onClick={onReset}>首次设置或忘记密码？用邮箱验证码设置</button>
+  </form>;
+}
+
+export function PasswordSetup({ meta, initialEmail = "", onSignedIn }: {
+  meta: Meta; initialEmail?: string; onSignedIn: (user: User) => void;
+}) {
+  const [email, setEmail] = useState(initialEmail);
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    if (sent && !passwordValid(password)) { setError("密码需为 9–128 位，且同时包含英文字母和数字"); return; }
+    if (sent && password !== confirm) { setError("两次输入的密码不一致"); return; }
+    setBusy(true);
+    try {
+      if (!sent) {
+        await api("/auth/email/request-code", "POST", { email });
+        setSent(true);
+      } else {
+        const result = await api<{ user: User }>("/auth/password/set", "POST", { email, code, password });
+        onSignedIn(result.user);
+      }
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <form className="stack-form email-sign-in" onSubmit={(event) => void submit(event)}>
+    <p className="auth-description">验证北大邮箱后设置新密码。完成后，其他设备上的登录会失效。</p>
+    <label>北大邮箱<input type="email" autoComplete="email" required maxLength={254} value={email}
+      disabled={sent || busy || !!initialEmail} placeholder="name@pku.edu.cn 或 name@stu.pku.edu.cn"
+      onChange={(event) => setEmail(event.target.value)} /></label>
+    {sent && <>
+      <p className="hint" role="status">验证码已发送至 {email}，10 分钟内有效。</p>
+      <label>8 位验证码<input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{8}" required
+        value={code} onChange={(event) => setCode(event.target.value)} /></label>
+      <label>新密码<input type="password" autoComplete="new-password" required minLength={9}
+        maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+      <PasswordRules value={password} />
+      <label>确认新密码<input type="password" autoComplete="new-password" required minLength={9} maxLength={128}
+        value={confirm} onChange={(event) => setConfirm(event.target.value)} /></label>
+      <button type="button" className="text-button" onClick={() => { setSent(false); setCode(""); }}>重新获取验证码</button>
+    </>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+    {!meta.email_auth_ready && <p className="form-error">邮件服务尚未配置，暂时无法设置或重置密码。</p>}
+    <button className="button primary full" type="submit" disabled={busy || !meta.email_auth_ready}>
+      <LockKeyhole size={16} />{busy ? "处理中…" : sent ? "验证并保存密码" : "发送验证码"}
+    </button>
+  </form>;
 }
 
 export function ChatCenter({ user, conversations, initialItem, initialDraft, onStarted, refresh }: {
