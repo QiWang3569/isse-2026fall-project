@@ -1,15 +1,15 @@
 :root {
-  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-  color: #263e34;
-  background: #fafbf7;
+  font-family: "SF Pro Text", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  color: #233c32;
+  background: #f8faf7;
   font-synthesis: none;
   font-weight: 400;
   font-size: 14px;
-  --green: #275f4f;
-  --deep: #244e41;
-  --muted: #869087;
-  --line: #e8ece4;
-  --light: #f1f4ed;
+  --green: #24674f;
+  --deep: #194d3c;
+  --muted: #6b7c71;
+  --line: #e1e9e1;
+  --light: #eef4ed;
 }
 .mobile-search {
   display: none;
@@ -48,17 +48,17 @@ select,
 textarea {
   color: #294036;
   background: white;
-  border: 1px solid #dfe5dc;
-  border-radius: 9px;
-  padding: 11px 13px;
+  border: 1px solid #d6e1d8;
+  border-radius: 11px;
+  padding: 12px 14px;
   min-width: 0;
   outline: none;
 }
 input:focus,
 textarea:focus,
 select:focus {
-  border-color: #739a7c;
-  box-shadow: 0 0 0 3px #91b29520;
+  border-color: #4f9474;
+  box-shadow: 0 0 0 4px #4f947426;
 }
 button:focus-visible,
 a:focus-visible {
@@ -93,8 +93,8 @@ a {
 }
 .sidebar {
   width: 224px;
-  background: #f4f6ef;
-  border-right: 1px solid #e5e9df;
+  background: #f4f8f3;
+  border-right: 1px solid #e0e9df;
   padding: 35px 23px 25px;
   position: fixed;
   inset: 0 auto 0 0;
@@ -161,13 +161,13 @@ a {
   display: flex;
   align-items: center;
   gap: 13px;
-  border-radius: 9px;
+  border-radius: 12px;
   padding: 14px 13px;
   text-align: left;
-  color: #718071;
+  color: #617569;
   font-size: 13px;
   width: 100%;
-  transition: 0.15s;
+  transition: background .18s, color .18s, transform .18s;
 }
 
 .sr-only {
@@ -183,11 +183,25 @@ a {
 }
 
 .email-sign-in {
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #f7faf3;
+  padding: 2px 0 0;
+  gap: 14px;
 }
+.auth-methods { display: grid; gap: 18px; }
+.auth-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 5px; border-radius: 13px; background: #edf3ed; }
+.auth-tabs button { min-height: 42px; padding: 10px 6px; border-radius: 9px; color: #64786d; font-size: 12px; transition: background .18s, box-shadow .18s; }
+.auth-tabs button.active { background: #fff; color: var(--deep); font-weight: 700; box-shadow: 0 2px 9px #1b513b14; }
+.auth-description { color: #52695a; font-size: 13px; line-height: 1.7; }
+.auth-steps { display: flex; gap: 8px; align-items: center; }
+.auth-steps span { padding: 6px 10px; border-radius: 999px; background: #eef1ec; color: #829186; font-size: 11px; }
+.auth-steps span.current { background: #e2f0e6; color: #28654d; font-weight: 650; }
+.password-rules { display: flex; flex-wrap: wrap; gap: 7px; margin-top: -7px; }
+.password-rules span { border-radius: 999px; padding: 4px 8px; color: #728274; background: #f0f3ef; font-size: 11px; }
+.password-rules span::before { content: "·"; margin-right: 5px; font-weight: 700; }
+.password-rules span.met { color: #22694d; background: #e4f2e9; }
+.password-rules span.met::before { content: "✓"; }
+.auth-reset-link { align-self: center; }
+.auth-back { justify-self: start; }
+.auth-change-email { align-self: flex-start; }
 
 .chat-page {
   padding: 30px;
@@ -267,12 +281,14 @@ a {
   .chat-compose > div { align-items: flex-end; }
 }
 .nav-item:hover {
-  background: #eaf0e4;
+  background: #e7efe7;
+  transform: translateX(2px);
 }
 .nav-item.active {
-  background: #e2ebdc;
-  color: #2b5e45;
-  font-weight: 600;
+  background: #fff;
+  color: var(--deep);
+  font-weight: 700;
+  box-shadow: 0 5px 16px #2b594014;
 }
 .nav-new {
   font-size: 8px;
@@ -285,40 +301,18 @@ a {
 }
 .sidebar-bottom {
   margin-top: auto;
-  padding-top: 40px;
-}
-.eco-note {
-  padding: 20px 15px;
-  background: linear-gradient(145deg, #edf1e2, #e3ead9);
-  border-radius: 11px;
-  color: #687e59;
-}
-.eco-note h3 {
-  font-family: "Songti SC", "SimSun", serif;
-  font-size: 17px;
-  font-weight: 400;
-  line-height: 1.8;
-  margin: 12px 0 9px;
-}
-.eco-note p {
-  font-size: 10px;
-  color: #919b82;
-}
-.eco-note > span {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 9px;
-  margin-top: 25px;
+  padding-top: 24px;
 }
 .sidebar-caption {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 9px;
-  color: #9aa38f;
-  margin: 25px -6px 0;
+  color: #687b6d;
+  margin: 0;
+  padding: 12px 8px;
   justify-content: center;
+  border-top: 1px solid var(--line);
 }
 .main-shell {
   margin-left: 224px;
@@ -335,7 +329,8 @@ a {
   gap: 20px;
   padding: 0 42px;
   border-bottom: 1px solid var(--line);
-  background: #fdfefa;
+  background: #ffffffeb;
+  backdrop-filter: blur(14px);
 }
 .global-search {
   display: flex;
@@ -552,8 +547,10 @@ main {
   padding: 32px 42px 0;
 }
 .hero {
-  border-radius: 15px;
-  background: #eef2e5;
+  border-radius: 20px;
+  background: linear-gradient(118deg, #e6f1e8, #f5f4e9 85%);
+  border: 1px solid #dce9db;
+  box-shadow: 0 18px 38px #2b59400c;
   min-height: 334px;
   display: grid;
   grid-template-columns: 1.12fr 1fr;
@@ -603,8 +600,8 @@ main {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border-radius: 8px;
-  padding: 11px 17px;
+  border-radius: 11px;
+  padding: 12px 18px;
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
@@ -618,6 +615,7 @@ main {
 .button.primary {
   background: var(--green);
   color: #fff;
+  box-shadow: 0 7px 17px #205d422c;
 }
 .button.primary:hover:not(:disabled) {
   background: #1d4c3e;
@@ -878,15 +876,16 @@ main {
 }
 .item-card {
   background: #fff;
-  border: 1px solid #e9ede3;
-  border-radius: 11px;
+  border: 1px solid #e2ebe1;
+  border-radius: 16px;
   overflow: hidden;
-  transition: 0.18s;
+  box-shadow: 0 4px 16px #2e554009;
+  transition: transform .2s, box-shadow .2s, border-color .2s;
 }
 .item-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 8px 25px #3042260c;
-  border-color: #d7e1cd;
+  transform: translateY(-4px);
+  box-shadow: 0 14px 32px #2750391c;
+  border-color: #b9d2bf;
 }
 .card-visual {
   position: relative;
@@ -1281,8 +1280,8 @@ footer .brand svg {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: #152d2559;
-  backdrop-filter: blur(4px);
+  background: #122b2166;
+  backdrop-filter: blur(8px);
   z-index: 100;
   display: flex;
   align-items: center;
@@ -1290,14 +1289,15 @@ footer .brand svg {
   padding: 25px;
 }
 .modal {
-  width: 620px;
+  width: 640px;
   max-width: 100%;
   max-height: 90vh;
   overflow: auto;
-  border-radius: 17px;
-  background: #fdfef9;
-  box-shadow: 0 22px 90px #163b292e;
-  padding: 27px;
+  border-radius: 22px;
+  background: #fff;
+  border: 1px solid #ecf1e9;
+  box-shadow: 0 28px 90px #163b2940;
+  padding: 30px;
   outline: none;
 }
 .modal.wide {
@@ -1311,9 +1311,9 @@ footer .brand svg {
   margin-bottom: 23px;
 }
 .modal-head h2 {
-  font-size: 20px;
+  font-size: 23px;
   font-family: "Songti SC", "SimSun", serif;
-  color: #45623e;
+  color: #244b37;
 }
 .stack-form {
   display: flex;
@@ -1326,7 +1326,7 @@ footer .brand svg {
   flex-direction: column;
   gap: 8px;
   font-size: 12px;
-  color: #687d59;
+  color: #445f4d;
 }
 .stack-form label > small {
   font-size: 10px;
@@ -1449,29 +1449,33 @@ footer .brand svg {
   justify-content: center;
 }
 .login-options {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
 }
 .login-options button {
-  display: flex;
-  align-items: center;
-  padding: 15px;
-  border: 1px solid #e4eadb;
-  border-radius: 9px;
-  gap: 13px;
-  background: #f5f7ee;
+  display: grid;
+  justify-items: start;
+  align-content: start;
+  padding: 13px;
+  border: 1px solid #e3ebe3;
+  border-radius: 12px;
+  gap: 9px;
+  background: #f8faf7;
   text-align: left;
+  min-width: 0;
+  transition: background .18s, border-color .18s, transform .18s;
 }
+.login-options button:hover { background: #eff6ef; border-color: #b9d1bf; transform: translateY(-2px); }
 .login-options button > span:nth-child(2) {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 3px;
 }
-.login-options button > svg {
-  margin-left: auto;
-  color: #8ba178;
-}
+.demo-section { border-top: 1px solid var(--line); padding-top: 17px; display: grid; gap: 11px; }
+.demo-section > p { display: flex; justify-content: space-between; gap: 8px; color: #536b59; font-size: 12px; font-weight: 600; }
+.demo-section > p span { color: #8b9b8d; font-weight: 400; }
+.demo-action { font-size: 11px; font-weight: 650; color: var(--green); }
 .login-options strong {
   font-size: 13px;
   color: #57794b;
@@ -1479,7 +1483,7 @@ footer .brand svg {
 }
 .login-options small {
   font-size: 10px;
-  color: #8fa27d;
+  color: #6d8172;
 }
 .toast {
   position: fixed;
@@ -1939,12 +1943,6 @@ footer .brand svg {
   .nav-label {
     font-size: 9px;
   }
-  .eco-note {
-    padding: 15px 12px;
-  }
-  .eco-note h3 {
-    font-size: 15px;
-  }
   .hero-art {
     opacity: 0.65;
   }
@@ -2288,7 +2286,7 @@ footer .brand svg {
   .modal {
     padding: 20px;
     max-height: 88vh;
-    border-radius: 13px;
+    border-radius: 18px;
   }
   .modal-head h2 {
     font-size: 18px;
@@ -2316,9 +2314,14 @@ footer .brand svg {
   .stack-form input,
   .stack-form select,
   .stack-form textarea {
-    font-size: 12px;
-    padding: 10px;
+    font-size: 13px;
+    padding: 11px;
   }
+  .auth-tabs button { font-size: 11px; }
+  .login-options { grid-template-columns: 1fr; }
+  .login-options button { display: flex; align-items: center; }
+  .login-options button .demo-action { margin-left: auto; }
+  .demo-section > p { font-size: 11px; }
   .field-title small {
     display: block;
     margin: 6px 0;
@@ -2520,13 +2523,13 @@ footer .brand svg {
     font-size: 10px;
   }
   .hero p {
-    font-size: 10px;
+    font-size: 12px;
   }
   .hero-foot {
-    font-size: 8px;
+    font-size: 10px;
   }
   .card-title {
-    font-size: 12px;
+    font-size: 13px;
   }
   .card-tags span,
   .condition-chip {
@@ -2534,13 +2537,13 @@ footer .brand svg {
   }
   .card-foot,
   .compare-add {
-    font-size: 9px;
+    font-size: 10px;
   }
   .intent-banner p,
   .intent-banner input,
   .intent-banner .button,
   .category-tabs button {
-    font-size: 11px;
+    font-size: 12px;
   }
   .section-heading p,
   .listing-count {
