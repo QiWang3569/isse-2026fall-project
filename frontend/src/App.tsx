@@ -21,7 +21,9 @@ import {
   LayoutGrid,
   Leaf,
   LogOut,
+  Mail,
   MapPin,
+  Megaphone,
   Monitor,
   Pause,
   Play,
@@ -32,6 +34,7 @@ import {
   Sparkles,
   Sprout,
   Upload,
+  Users,
   X,
   Lamp,
   Copy,
@@ -48,6 +51,8 @@ import {
   type Meta,
   type Intent,
   type Notice,
+  type SaleFeedbackNotice,
+  type Announcement,
   type Wanted,
   type Report,
   type ChatReport,
@@ -73,9 +78,10 @@ import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
 const nav = [
   { key: "market", label: "逛逛校园", icon: Compass },
   { key: "wanted", label: "求购看板", icon: Sprout },
+  { key: "intents", label: "我的代蹲", icon: Sparkles },
   { key: "profile", label: "我的主页", icon: UserRound },
 ];
-type View = "market" | "profile" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "admin";
+type View = "market" | "profile" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "mywanted" | "admin";
 type ModalName =
   | "login"
   | "intent"
@@ -84,6 +90,7 @@ type ModalName =
   | "notifications"
   | "compare"
   | "detail"
+  | "announcements"
   | null;
 const validViews = [
   "market",
@@ -93,6 +100,7 @@ const validViews = [
   "wanted",
   "favorites",
   "mine",
+  "mywanted",
   "admin",
 ];
 function currentView(): View {
@@ -165,37 +173,98 @@ export default function App() {
     [campus, setCampus] = useState(""),
     [price, setPrice] = useState(""),
     [sort, setSort] = useState("recommended"),
-    [page, setPage] = useState(1);
+    [page, setPage] = useState(1),
+    [onSale, setOnSale] = useState(true);
   const [intentQuery, setIntentQuery] = useState(""),
     [selected, setSelected] = useState<Item | null>(null),
     [compare, setCompare] = useState<Item[]>([]);
+  const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [editingWanted, setEditingWanted] = useState<Wanted | null>(null);
   const [notices, setNotices] = useState<Notice[]>([]),
     [prefill, setPrefill] = useState<Wanted | null>(null);
   const [noticeIntent, setNoticeIntent] = useState<Intent | null>(null);
   const [chatItem, setChatItem] = useState<Item | null>(null),
     [chatDraft, setChatDraft] = useState("");
-  const [draft, setDraft] = useState(""),
-    [draftOpen, setDraftOpen] = useState(false),
-    [reporting, setReporting] = useState(false),
+  const [avatarMenu, setAvatarMenu] = useState(false);
+  const [editProfile, setEditProfile] = useState(false);
+  const [reporting, setReporting] = useState(false),
     [reportText, setReportText] = useState("");
   const [searchRequest, setSearchRequest] = useState(0);
   const marketRef = useRef<HTMLElement>(null);
-  const draftRef = useRef<HTMLTextAreaElement>(null);
+  const avatarMenuRef = useRef<HTMLDivElement>(null);
   const reportRef = useRef<HTMLTextAreaElement>(null);
+  const categoryTabsRef = useRef<HTMLDivElement>(null);
+  const categoryDrag = useRef({ active: false, startX: 0, startLeft: 0, moved: false });
+  const sidebarNavRef = useRef<HTMLElement>(null);
+  const sidebarNavDrag = useRef({ active: false, startX: 0, startLeft: 0, moved: false });
+
+  function categoryDown(e: React.PointerEvent<HTMLDivElement>) {
+    const el = categoryTabsRef.current;
+    if (!el) return;
+    categoryDrag.current = { active: true, startX: e.clientX, startLeft: el.scrollLeft, moved: false };
+  }
+  function categoryMove(e: React.PointerEvent<HTMLDivElement>) {
+    const el = categoryTabsRef.current;
+    const d = categoryDrag.current;
+    if (!el || !d.active) return;
+    const dx = e.clientX - d.startX;
+    if (Math.abs(dx) > 5) d.moved = true;
+    if (d.moved) el.scrollLeft = d.startLeft - dx;
+  }
+  function categoryUp() {
+    categoryDrag.current.active = false;
+  }
+  function categoryClickCapture(e: React.MouseEvent) {
+    if (categoryDrag.current.moved) {
+      e.preventDefault();
+      e.stopPropagation();
+      categoryDrag.current.moved = false;
+    }
+  }
+
+  function sidebarNavDown(e: React.PointerEvent<HTMLElement>) {
+    const el = sidebarNavRef.current;
+    if (!el) return;
+    sidebarNavDrag.current = { active: true, startX: e.clientX, startLeft: el.scrollLeft, moved: false };
+  }
+  function sidebarNavMove(e: React.PointerEvent<HTMLElement>) {
+    const el = sidebarNavRef.current;
+    const d = sidebarNavDrag.current;
+    if (!el || !d.active) return;
+    const dx = e.clientX - d.startX;
+    if (Math.abs(dx) > 5) d.moved = true;
+    if (d.moved) el.scrollLeft = d.startLeft - dx;
+  }
+  function sidebarNavUp() {
+    sidebarNavDrag.current.active = false;
+  }
+  function sidebarNavClickCapture(e: React.MouseEvent) {
+    if (sidebarNavDrag.current.moved) {
+      e.preventDefault();
+      e.stopPropagation();
+      sidebarNavDrag.current.moved = false;
+    }
+  }
   useEffect(() => {
     if (!searchRequest || view !== "market") return;
     marketRef.current?.scrollIntoView({ block: "start" });
     marketRef.current?.focus({ preventScroll: true });
   }, [searchRequest, view]);
   useEffect(() => {
-    const target = reporting
-      ? reportRef.current
-      : draftOpen
-        ? draftRef.current
-        : null;
+    const target = reporting ? reportRef.current : null;
     target?.scrollIntoView({ block: "center" });
     target?.focus({ preventScroll: true });
-  }, [reporting, draftOpen]);
+  }, [reporting]);
+  useEffect(() => {
+    if (!avatarMenu) return;
+    const onDown = (event: MouseEvent) => {
+      if (!avatarMenuRef.current?.contains(event.target as Node)) {
+        setAvatarMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [avatarMenu]);
   const refresh = useCallback(() => setRevision((v) => v + 1), []);
   useEffect(() => {
     const listener = () => {
@@ -258,6 +327,7 @@ export default function App() {
     location.hash = v;
     setView(v);
     setPage(1);
+    setOnSale(v === "market");
   };
   const needUser = () => {
     if (!user) {
@@ -296,8 +366,6 @@ export default function App() {
     setModal(type);
   }
   async function openItem(item: Item) {
-    setDraft("");
-    setDraftOpen(false);
     setReporting(false);
     setReportText("");
     try {
@@ -358,6 +426,7 @@ export default function App() {
   if (price) listParams.set("max_price", price);
   if (view === "mine") listParams.set("mine", "true");
   if (view === "favorites") listParams.set("favorites", "true");
+  if (!onSale) listParams.set("on_sale", "false");
   const listingView = ["market", "favorites", "mine"].includes(view);
   const items = useResource<{ items: Item[]; total: number }>(
     "/items/?" + listParams.toString(),
@@ -371,8 +440,9 @@ export default function App() {
     true,
   );
   const wanted = useResource<Wanted[]>("/wanted/", revision, view === "wanted");
+  const myWanted = useResource<Wanted[]>("/wanted/?mine=true", revision, view === "mywanted");
   const conversations = useResource<Conversation[]>("/conversations", revision, !!user, true);
-  const profileOverview = useResource<{ intents: number; listings: number; favorites: number }>(
+  const profileOverview = useResource<{ intents: number; listings: number; favorites: number; wanted: number }>(
     "/users/me/overview", revision, view === "profile" && !!user,
   );
   const taskNotices = useResource<Notice[]>(
@@ -385,12 +455,20 @@ export default function App() {
     `/items/${selected?.id ?? ""}/sale-feedback`, revision,
     modal === "detail" && !!selected?.is_owner && !!selected?.sale_feedback_count,
   );
+  const saleFeedbackMine = useResource<SaleFeedbackNotice[]>(
+    "/sale-feedback/my", revision, !!user, true,
+  );
+  const announcements = useResource<Announcement[]>(
+    "/announcements", revision, true,
+  );
   const visibleNotices = noticeIntent
     ? (taskNotices.data ?? []).filter((n) => n.intent_id === noticeIntent.id)
     : notices;
   const unread = notices.filter((n) => !n.is_read).length;
   const chatUnread = (conversations.data ?? []).reduce((sum, c) => sum + c.unread_count, 0);
-  const personalView = ["profile", "intents", "messages", "favorites", "mine"].includes(view);
+  const feedbackUnread = (saleFeedbackMine.data ?? []).length;
+  const allUnread = unread + chatUnread + feedbackUnread;
+  const personalView = ["profile", "intents", "messages", "favorites", "mine", "mywanted"].includes(view);
 
   if (!meta)
     return (
@@ -411,6 +489,95 @@ export default function App() {
         )}
       </div>
     );
+
+  const renderNotice = (n: Notice) => (
+    <article className={`notice ${n.is_read ? "" : "unread"}`} key={n.id}>
+      <ProductArt item={n.item} />
+      <div>
+        <span className="task-status">
+          {!n.available
+            ? `${statusText[n.item.status] ?? "不在售"}，暂不可咨询`
+            : n.verdict === "UNCERTAIN"
+              ? "可能合适，部分条件待确认"
+              : "有好物符合你的期待"}
+        </span>
+        <h3>{n.item.title}</h3>
+        <p>{n.reason}</p>
+        {n.evidence.length > 0 && (
+          <details className="agent-evidence">
+            <summary>
+              查看
+              {n.review_mode === "remote" ? "助手核对" : "关键词命中"}
+              依据
+            </summary>
+            {n.evidence.map((e, index) => (
+              <p key={index}>
+                {e.criterion}：<q>{e.quote}</q>
+              </p>
+            ))}
+          </details>
+        )}
+        {n.questions.length > 0 && (
+          <div className="agent-questions">
+            <strong>建议向卖家确认</strong>
+            <ul>
+              {n.questions.map((q, index) => (
+                <li key={index}>{q}</li>
+              ))}
+            </ul>
+            <span className="hint">这些问题会加入咨询草稿。</span>
+          </div>
+        )}
+        <div>
+          <button
+            className="text-button"
+            onClick={() => {
+              void operate(() =>
+                api(`/notifications/${n.id}/read`, "PATCH"),
+              );
+              void openItem(n.item);
+            }}
+          >
+            查看商品
+            <ArrowRight size={14} />
+          </button>
+          {noticeIntent && noticeIntent.status !== "COMPLETED" && (
+            <button
+              className="text-button"
+              disabled={busy}
+              onClick={() =>
+                void operate(
+                  async () => {
+                    await api(`/intents/${noticeIntent.id}/complete`, "POST", {
+                      item_id: n.item.id,
+                    });
+                    setModal(null);
+                  },
+                  "已记录买到这件商品，代蹲已结束",
+                )
+              }
+            >
+              已买到这件
+            </button>
+          )}
+          {!n.is_read && (
+            <button
+              className="text-button"
+              disabled={busy}
+              onClick={() =>
+                void operate(() =>
+                  api(`/notifications/${n.id}/read`, "PATCH"),
+                )
+              }
+            >
+              标为已读
+            </button>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -422,8 +589,15 @@ export default function App() {
           <Brand />
         </button>
         <p className="brand-caption">旧物渡新主，学海渡轻舟</p>
-        <div className="nav-label">校园生活的另一种循环</div>
-        <nav aria-label="主导航">
+        <nav
+          aria-label="主导航"
+          ref={sidebarNavRef}
+          onPointerDown={sidebarNavDown}
+          onPointerMove={sidebarNavMove}
+          onPointerUp={sidebarNavUp}
+          onPointerCancel={sidebarNavUp}
+          onClickCapture={sidebarNavClickCapture}
+        >
           {nav.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -441,6 +615,13 @@ export default function App() {
               {key === "profile" && chatUnread > 0 && <span className="nav-new">{chatUnread}</span>}
             </button>
           ))}
+          <button
+            className={`nav-item ${modal === "announcements" ? "active" : ""}`}
+            onClick={() => setModal("announcements")}
+          >
+            <Megaphone size={20} strokeWidth={1.7} />
+            <span>系统公告</span>
+          </button>
           {user?.role === "admin" && (
             <button
               className={`nav-item ${view === "admin" ? "active" : ""}`}
@@ -452,10 +633,16 @@ export default function App() {
           )}
         </nav>
         <div className="sidebar-bottom">
-          <div className="sidebar-caption">
-            <ShieldCheck size={15} />
-            {meta.demo_mode ? "本地演示 · 校园邮箱认证" : "北大邮箱社区"}
-          </div>
+          <button
+            className="sidebar-contact"
+            onClick={() => void copy("pkuyandu@163.com", "邮箱已复制")}
+          >
+            <Mail size={15} />
+            <span>
+              <strong>联系我们</strong>
+              <small>pkuyandu@163.com</small>
+            </span>
+          </button>
         </div>
       </aside>
       <div className="main-shell">
@@ -494,7 +681,7 @@ export default function App() {
             </label>
             <button
               className="notification-button icon-button"
-              aria-label={`通知${unread ? `，${unread} 条未读` : ""}`}
+              aria-label={`通知${allUnread ? `，${allUnread} 条未读` : ""}`}
               onClick={() => {
                 if (needUser()) {
                   setNoticeIntent(null);
@@ -503,17 +690,46 @@ export default function App() {
               }}
             >
               <Bell size={21} />
-              {unread > 0 && <span>{unread}</span>}
+              {allUnread > 0 && <span>{allUnread}</span>}
             </button>
-            <button
-              className="avatar-button"
-              onClick={() => user ? navigate("profile") : setModal("login")}
-              aria-label={user ? `查看${user.nickname}的个人主页${chatUnread ? `，${chatUnread} 条未读消息` : ""}` : "登录或注册"}
-            >
-              <span className={`avatar avatar-color-${user?.avatar_color ?? "sage"}`}>{user ? user.nickname[0] : "访"}</span>
-              <span className="avatar-name">{user?.nickname || "登录/注册"}</span>
-              {user && chatUnread > 0 && <span className="avatar-unread" aria-hidden="true" />}
-            </button>
+            <div className="avatar-menu-wrap" ref={avatarMenuRef}>
+              <button
+                className="avatar-button"
+                onClick={() => user ? setAvatarMenu(!avatarMenu) : setModal("login")}
+                aria-label={user ? `查看${user.nickname}的个人主页${chatUnread ? `，${chatUnread} 条未读消息` : ""}` : "登录或注册"}
+                aria-haspopup={user ? "menu" : undefined}
+                aria-expanded={user ? avatarMenu : undefined}
+              >
+                <span className={`avatar avatar-color-${user?.avatar_color ?? "sage"}`}>{user ? user.nickname[0] : "访"}</span>
+                <span className="avatar-name">{user?.nickname || "登录/注册"}</span>
+                {user && chatUnread > 0 && <span className="avatar-unread" aria-hidden="true" />}
+              </button>
+              {user && avatarMenu && (
+                <div className="avatar-menu" role="menu">
+                  <button
+                    role="menuitem"
+                    className="avatar-menu-item"
+                    onClick={() => { setAvatarMenu(false); navigate("profile"); }}
+                  >
+                    查看个人主页
+                  </button>
+                  <button
+                    role="menuitem"
+                    className="avatar-menu-item"
+                    onClick={() => { setAvatarMenu(false); setEditProfile(true); navigate("profile"); }}
+                  >
+                    编辑资料
+                  </button>
+                  <button
+                    role="menuitem"
+                    className="avatar-menu-item"
+                    onClick={() => { setAvatarMenu(false); setModal("login"); }}
+                  >
+                    账号设置
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
         <main>
@@ -524,6 +740,8 @@ export default function App() {
             onNavigate={navigate} onAccount={() => setModal("login")}
             onUpdated={(account) => { setUser(account); setToast("个人资料已更新"); refresh(); }}
             onError={setToast}
+            autoEdit={editProfile}
+            onAutoEditConsumed={() => setEditProfile(false)}
           /> : <Empty title="登录后查看个人主页" text="使用北大邮箱登录，集中管理你的代蹲、消息、收藏与发布。"
             action="登录或注册" onAction={() => setModal("login")} />)}
           {view === "market" && (
@@ -703,7 +921,17 @@ export default function App() {
                   )}
                 </Intro>
               )}
-              <div className="category-tabs" role="group" aria-label="物品分类">
+              <div
+                className="category-tabs"
+                role="group"
+                aria-label="物品分类"
+                ref={categoryTabsRef}
+                onPointerDown={categoryDown}
+                onPointerMove={categoryMove}
+                onPointerUp={categoryUp}
+                onPointerCancel={categoryUp}
+                onClickCapture={categoryClickCapture}
+              >
                 {["全部好物", ...meta.categories].map((c, index) => {
                   const Icon = [
                     LayoutGrid,
@@ -712,6 +940,7 @@ export default function App() {
                     Bike,
                     Lamp,
                     Shirt,
+                    Users,
                   ][index];
                   return (
                     <button
@@ -730,6 +959,7 @@ export default function App() {
                             "出行运动",
                             "宿舍生活",
                             "服饰周边",
+                            "人员招募",
                           ][index - 1]
                         : c}
                     </button>
@@ -766,11 +996,19 @@ export default function App() {
                       “{query}”<X size={13} />
                     </button>
                   )}
-                  <span className="filter-hint">
-                    {view === "market"
-                      ? "只看正在出售的好物"
-                      : "包含已售与过期商品"}
-                  </span>
+                  <label>
+                    <span className="sr-only">售卖状态</span>
+                    <select
+                      value={onSale ? "on_sale" : "all"}
+                      onChange={(e) => {
+                        setOnSale(e.target.value === "on_sale");
+                        setPage(1);
+                      }}
+                    >
+                      <option value="on_sale">只看在售</option>
+                      <option value="all">所有好物</option>
+                    </select>
+                  </label>
                 </div>
                 <label className="sort-picker">
                   <ArrowDownUp size={14} />
@@ -1107,19 +1345,31 @@ export default function App() {
                           {w.buyer.nickname}
                         </span>
                         {w.is_owner ? (
-                          <button
-                            className="text-button"
-                            disabled={busy}
-                            onClick={() =>
-                              void operate(
-                                () => api(`/wanted/${w.id}`, "DELETE"),
-                                "求购已结束",
-                              )
-                            }
-                          >
-                            我已找到
-                            <Check size={15} />
-                          </button>
+                          <div className="wanted-actions">
+                            <button
+                              className="text-button"
+                              disabled={busy}
+                              onClick={() => {
+                                setEditingWanted(w);
+                                setModal("wanted");
+                              }}
+                            >
+                              编辑
+                            </button>
+                            <button
+                              className="text-button"
+                              disabled={busy}
+                              onClick={() =>
+                                void operate(
+                                  () => api(`/wanted/${w.id}`, "DELETE"),
+                                  "求购已结束",
+                                )
+                              }
+                            >
+                              我已找到
+                              <Check size={15} />
+                            </button>
+                          </div>
                         ) : (
                           <button
                             className="text-button"
@@ -1148,6 +1398,112 @@ export default function App() {
               )}
             </>
           )}
+          {view === "mywanted" && (
+            <>
+              <Intro
+                kicker="YOUR WISHES"
+                title="我的求购"
+                text="管理你发布的求购，找到后可以提前结束。"
+              >
+                <button
+                  className="button primary"
+                  onClick={() => openForm("wanted")}
+                >
+                  <Plus size={17} />
+                  发布求购
+                </button>
+              </Intro>
+              {myWanted.loading ? (
+                <Busy />
+              ) : myWanted.error ? (
+                <Empty
+                  title="求购暂时无法加载"
+                  text={myWanted.error}
+                  action="重试"
+                  onAction={refresh}
+                />
+              ) : myWanted.data?.length ? (
+                <div className="wanted-grid">
+                  {myWanted.data.map((w) => (
+                    <article className="wanted-card" key={w.id}>
+                      <div className="wanted-card-top">
+                        <span className="category-label">{w.category}</span>
+                        <Sprout size={21} />
+                      </div>
+                      <h3>{w.title}</h3>
+                      <p>{w.description}</p>
+                      <div className="wanted-budget">
+                        预算 <strong>¥{money(w.budget)}</strong>
+                        <span>
+                          <MapPin size={13} />
+                          {campusShort(w.campus)}
+                        </span>
+                      </div>
+                      <div className="wanted-bottom">
+                        <span>
+                          {w.status === "ACTIVE"
+                            ? "求购中"
+                            : w.status === "EXPIRED"
+                              ? "已过期"
+                              : "已结束"}
+                        </span>
+                        {w.status === "ACTIVE" ? (
+                          <div className="wanted-actions">
+                            <button
+                              className="text-button"
+                              disabled={busy}
+                              onClick={() => {
+                                setEditingWanted(w);
+                                setModal("wanted");
+                              }}
+                            >
+                              编辑
+                            </button>
+                            <button
+                              className="text-button"
+                              disabled={busy}
+                              onClick={() =>
+                                void operate(
+                                  () => api(`/wanted/${w.id}`, "DELETE"),
+                                  "求购已结束",
+                                )
+                              }
+                            >
+                              我已找到
+                              <Check size={15} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="wanted-actions">
+                            <button
+                              className="text-button"
+                              disabled={busy}
+                              onClick={() =>
+                                void operate(
+                                  () => api(`/wanted/${w.id}/renew`, "POST"),
+                                  "求购已重新发布",
+                                )
+                              }
+                            >
+                              重新发布
+                              <RefreshCw size={14} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <Empty
+                  title="还没有发布求购"
+                  text="写下想找的物品，让同学们帮你留意。"
+                  action="发布求购"
+                  onAction={() => openForm("wanted")}
+                />
+              )}
+            </>
+          )}
           {view === "messages" && (user ? (
             <ChatCenter user={user} conversations={conversations.data ?? []}
               initialItem={chatItem} initialDraft={chatDraft}
@@ -1166,19 +1522,41 @@ export default function App() {
           )}
           <footer>
             <Brand small />
-            <span>物尽其用，让美好在校园里循环。</span>
-            <span className="footer-mode">
-              {meta.demo_mode ? "演示环境 · 数据仅保存在本地" : "燕渡校园社区"}
-            </span>
+            <span>校园生活的另一种循环</span>
+            <button
+              className="footer-contact"
+              onClick={() => void copy("pkuyandu@163.com", "邮箱已复制")}
+            >
+              联系我们
+            </button>
           </footer>
         </main>
       </div>
       {compare.length > 0 && (
         <div className="compare-tray">
-          <span>
-            <CheckCheck size={18} />
-            已选 {compare.length} 件好物
-          </span>
+          <div className="compare-tray-top">
+            <span>
+              <CheckCheck size={18} />
+              已选 {compare.length} 件好物
+            </span>
+            <div className="compare-actions">
+              <button
+                className="button primary"
+                disabled={compare.length < 2}
+                onClick={() => setModal("compare")}
+              >
+                比较一下
+                <ArrowRight size={15} />
+              </button>
+              <button
+                className="icon-button"
+                aria-label="清空对比"
+                onClick={() => setCompare([])}
+              >
+                <X size={17} />
+              </button>
+            </div>
+          </div>
           <div className="compare-selection">
             {compare.map((item) => (
               <button
@@ -1192,21 +1570,6 @@ export default function App() {
               </button>
             ))}
           </div>
-          <button
-            className="button primary"
-            disabled={compare.length < 2}
-            onClick={() => setModal("compare")}
-          >
-            比较一下
-            <ArrowRight size={15} />
-          </button>
-          <button
-            className="icon-button"
-            aria-label="清空对比"
-            onClick={() => setCompare([])}
-          >
-            <X size={17} />
-          </button>
         </div>
       )}
       {toast && (
@@ -1307,13 +1670,21 @@ export default function App() {
         </Modal>
       )}
       {modal === "publish" && (
-        <Modal title="让闲置，开启下一段故事" onClose={() => setModal(null)}>
+        <Modal
+          title={editingItem ? "编辑发布的商品" : "让闲置，开启下一段故事"}
+          onClose={() => {
+            setModal(null);
+            setEditingItem(null);
+          }}
+        >
           <PublishForm
             meta={meta}
             prefill={prefill}
+            editingItem={editingItem}
             onDone={() => {
               setModal(null);
-              setToast("好物发布成功，已为有需要的同学进行匹配");
+              setEditingItem(null);
+              setToast(editingItem ? "商品信息已更新" : "好物发布成功，已为有需要的同学进行匹配");
               refresh();
               navigate("mine");
             }}
@@ -1321,15 +1692,23 @@ export default function App() {
         </Modal>
       )}
       {modal === "wanted" && (
-        <Modal title="告诉同学们，你在找什么" onClose={() => setModal(null)}>
+        <Modal
+          title={editingWanted ? "编辑求购" : "告诉同学们，你在找什么"}
+          onClose={() => {
+            setModal(null);
+            setEditingWanted(null);
+          }}
+        >
           <WantedForm
             meta={meta}
             initial={query}
+            editingWanted={editingWanted}
             onDone={() => {
               setModal(null);
+              setEditingWanted(null);
               refresh();
               navigate("wanted");
-              setToast("求购已发布，期待好物与你相遇");
+              setToast(editingWanted ? "求购已更新" : "求购已发布，期待好物与你相遇");
             }}
           />
         </Modal>
@@ -1339,114 +1718,129 @@ export default function App() {
           title={noticeIntent ? "这个愿望发现的好物" : "燕渡为你捎来的消息"}
           onClose={() => setModal(null)}
         >
-          {noticeIntent && (
-            <p className="hint">当前愿望：{noticeIntent.raw_query}</p>
-          )}
-          {noticeIntent && taskNotices.loading ? (
-            <p className="hint">正在查看这个愿望的匹配结果…</p>
-          ) : noticeIntent && taskNotices.error ? (
-            <p role="alert">{taskNotices.error}</p>
-          ) : visibleNotices.length ? (
-            <div className="notice-list">
-              {visibleNotices.map((n) => (
-                <article
-                  className={`notice ${n.is_read ? "" : "unread"}`}
-                  key={n.id}
-                >
-                  <ProductArt item={n.item} />
-                  <div>
-                    <span className="task-status">
-                      {!n.available
-                        ? `${statusText[n.item.status] ?? "不在售"}，暂不可咨询`
-                        : n.verdict === "UNCERTAIN"
-                          ? "可能合适，部分条件待确认"
-                          : "有好物符合你的期待"}
-                    </span>
-                    <h3>{n.item.title}</h3>
-                    <p>{n.reason}</p>
-                    {n.evidence.length > 0 && (
-                      <details className="agent-evidence">
-                        <summary>
-                          查看
-                          {n.review_mode === "remote"
-                            ? "助手核对"
-                            : "关键词命中"}
-                          依据
-                        </summary>
-                        {n.evidence.map((e, index) => (
-                          <p key={index}>
-                            {e.criterion}：<q>{e.quote}</q>
-                          </p>
-                        ))}
-                      </details>
-                    )}
-                    {n.questions.length > 0 && (
-                      <div className="agent-questions">
-                        <strong>建议向卖家确认</strong>
-                        <ul>
-                          {n.questions.map((q, index) => (
-                            <li key={index}>{q}</li>
-                          ))}
-                        </ul>
-                        <span className="hint">这些问题会加入咨询草稿。</span>
+          {noticeIntent ? (
+            <>
+              <p className="hint">当前愿望：{noticeIntent.raw_query}</p>
+              {taskNotices.loading ? (
+                <p className="hint">正在查看这个愿望的匹配结果…</p>
+              ) : taskNotices.error ? (
+                <p role="alert">{taskNotices.error}</p>
+              ) : visibleNotices.length ? (
+                <div className="notice-list">
+                  {visibleNotices.map(renderNotice)}
+                </div>
+              ) : (
+                <Empty
+                  title="这个愿望暂时没有匹配好物"
+                  text="有符合这个愿望的好物时，会出现在这里。"
+                  action="返回代蹲任务"
+                  onAction={() => setModal(null)}
+                />
+              )}
+            </>
+          ) : (
+            <div className="notice-center">
+              {(announcements.data ?? []).length > 0 && (
+                <section className="notice-group">
+                  <h3 className="notice-group-title">公告与更新</h3>
+                  {(announcements.data ?? []).slice(0, 3).map((a) => (
+                    <article className="notice" key={a.id}>
+                      <div>
+                        <span className="task-status">{a.kind}</span>
+                        <h3>{a.title}</h3>
+                        <p>{a.body}</p>
                       </div>
-                    )}
-                    <div>
+                    </article>
+                  ))}
+                  <button
+                    className="text-button"
+                    onClick={() => setModal("announcements")}
+                  >
+                    查看全部公告
+                    <ArrowRight size={14} />
+                  </button>
+                </section>
+              )}
+              {chatUnread > 0 && (
+                <section className="notice-group">
+                  <h3 className="notice-group-title">站内新消息</h3>
+                  {(conversations.data ?? [])
+                    .filter((c) => c.unread_count > 0)
+                    .map((c) => (
+                      <article className="notice unread" key={c.id}>
+                        <div>
+                          <span className="task-status">新消息</span>
+                          <h3>{c.item_title}</h3>
+                          <p>{c.last_message?.body}</p>
+                        </div>
+                        <button
+                          className="text-button"
+                          onClick={() => {
+                            setModal(null);
+                            navigate("messages");
+                          }}
+                        >
+                          去查看
+                          <ArrowRight size={14} />
+                        </button>
+                      </article>
+                    ))}
+                </section>
+              )}
+              {feedbackUnread > 0 && (
+                <section className="notice-group">
+                  <h3 className="notice-group-title">买家反馈已售</h3>
+                  {(saleFeedbackMine.data ?? []).map((f) => (
+                    <article className="notice unread" key={f.id}>
+                      <ProductArt item={f.item} />
+                      <div>
+                        <span className="task-status">反馈已售</span>
+                        <h3>{f.item.title}</h3>
+                        <p>
+                          {f.reporter?.nickname ?? "买家"}反馈该商品可能已售，请核实。
+                        </p>
+                      </div>
                       <button
                         className="text-button"
                         onClick={() => {
-                          void operate(() =>
-                            api(`/notifications/${n.id}/read`, "PATCH"),
-                          );
-                          void openItem(n.item);
+                          setModal(null);
+                          void openItem(f.item);
                         }}
                       >
-                        查看商品
+                        去处理
                         <ArrowRight size={14} />
                       </button>
-                      {noticeIntent && noticeIntent.status !== "COMPLETED" && <button className="text-button" disabled={busy}
-                        onClick={() => void operate(async () => {
-                          await api(`/intents/${noticeIntent.id}/complete`, "POST", { item_id: n.item.id });
-                          setModal(null);
-                        }, "已记录买到这件商品，代蹲已结束")}>已买到这件</button>}
-                      {!n.is_read && (
-                        <button
-                          className="text-button"
-                          disabled={busy}
-                          onClick={() =>
-                            void operate(() =>
-                              api(`/notifications/${n.id}/read`, "PATCH"),
-                            )
-                          }
-                        >
-                          标为已读
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </article>
-              ))}
+                    </article>
+                  ))}
+                </section>
+              )}
+              {notices.length > 0 && (
+                <section className="notice-group">
+                  <h3 className="notice-group-title">代蹲匹配</h3>
+                  <div className="notice-list">{notices.map(renderNotice)}</div>
+                </section>
+              )}
+              {allUnread === 0 && (
+                <Empty
+                  title="暂时没有新消息"
+                  text="有新消息、匹配结果或买家反馈时会在这里提醒你。"
+                  action="去许个愿"
+                  onAction={() => {
+                    setModal(null);
+                    openForm("intent");
+                  }}
+                />
+              )}
             </div>
-          ) : (
-            <Empty
-              title={
-                noticeIntent ? "这个愿望暂时没有匹配好物" : "好消息正在路上"
-              }
-              text={
-                noticeIntent
-                  ? "有符合这个愿望的好物时，会出现在这里。"
-                  : "创建代蹲任务后，符合条件的好物会出现在这里。"
-              }
-              action={noticeIntent ? "返回代蹲任务" : "去许个愿"}
-              onAction={() =>
-                noticeIntent ? setModal(null) : openForm("intent")
-              }
-            />
           )}
         </Modal>
       )}
       {modal === "compare" && (
-        <Modal title="哪一件，更适合你？" onClose={() => setModal(null)} wide>
+        <Modal
+          title="哪一件，更适合你？"
+          onClose={() => setModal(null)}
+          style={{ width: `min(860px, ${compare.length * 280 + 60}px)` }}
+        >
           <div
             className="comparison-grid"
             style={{
@@ -1490,8 +1884,30 @@ export default function App() {
           </p>
         </Modal>
       )}
+      {modal === "announcements" && (
+        <Modal title="公告与更新" onClose={() => setModal(null)}>
+          {(announcements.data ?? []).length ? (
+            <div className="announcement-list">
+              {(announcements.data ?? []).map((a) => (
+                <article className="announcement" key={a.id}>
+                  <span
+                    className={`announcement-kind ${a.kind === "更新" ? "update" : ""}`}
+                  >
+                    {a.kind}
+                  </span>
+                  <h3>{a.title}</h3>
+                  <p>{a.body}</p>
+                  <time>{new Date(a.created_at).toLocaleString("zh-CN")}</time>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <Empty title="暂无公告" text="有新的公告和更新时会显示在这里。" />
+          )}
+        </Modal>
+      )}
       {modal === "detail" && selected && (
-        <Modal title="好物详情" onClose={() => setModal(null)} wide>
+        <Modal title="好物详情" onClose={() => setModal(null)} style={{ width: 850 }}>
           <div className="detail-grid">
             <div>
               <ProductArt item={selected} />
@@ -1554,7 +1970,19 @@ export default function App() {
                       setSelected(await api<Item>(`/items/${selected.id}/sale-feedback/${feedback.id}/review`, "POST", { action: "decline" }));
                     }, "已驳回反馈")}>仍在售</button>
                   </div>)}
-                  {["ACTIVE", "RESERVED", "EXPIRED"].includes(
+                  {selected.status !== "SOLD" && selected.status !== "BANNED" && (
+                    <button
+                      className="button secondary"
+                      disabled={busy}
+                      onClick={() => {
+                        setEditingItem(selected);
+                        setModal("publish");
+                      }}
+                    >
+                      编辑商品
+                    </button>
+                  )}
+                  {["ACTIVE", "RESERVED", "EXPIRED", "SOLD"].includes(
                     selected.status,
                   ) && (
                     <>
@@ -1600,25 +2028,27 @@ export default function App() {
                           标记预订
                         </button>
                       )}
-                      <button
-                        className="button primary"
-                        disabled={busy}
-                        onClick={() =>
-                          void operate(
-                            async () =>
-                              setSelected(
-                                await api<Item>(
-                                  `/items/${selected.id}/status`,
-                                  "PATCH",
-                                  { status: "SOLD" },
+                      {selected.status !== "SOLD" && (
+                        <button
+                          className="button primary"
+                          disabled={busy}
+                          onClick={() =>
+                            void operate(
+                              async () =>
+                                setSelected(
+                                  await api<Item>(
+                                    `/items/${selected.id}/status`,
+                                    "PATCH",
+                                    { status: "SOLD" },
+                                  ),
                                 ),
-                              ),
-                            "已标记售出",
-                          )
-                        }
-                      >
-                        标记已售出
-                      </button>
+                              "已标记售出",
+                            )
+                          }
+                        >
+                          标记已售出
+                        </button>
+                      )}
                     </>
                   )}
                 </div>
@@ -1628,32 +2058,6 @@ export default function App() {
                     onClick={() => { if (!needUser()) return; void operate(
                       () => api(`/items/${selected.id}/sale-feedback`, "POST"),
                       "已通知卖家核实商品是否售出"); }}><Flag size={16} />反馈已售</button>}
-                  <button className="button primary" disabled={selected.status !== "ACTIVE"}
-                    onClick={() => {
-                      if (!needUser()) return;
-                      setChatItem(selected); setChatDraft(""); setModal(null); navigate("messages");
-                    }}>
-                    <MessageCircle size={16} />联系卖家
-                  </button>
-                  <button
-                    className="button secondary"
-                    disabled={busy || selected.status !== "ACTIVE"}
-                    onClick={() => {
-                      if (needUser())
-                        void operate(async () => {
-                          const d = await api<{ draft: string }>(
-                            `/items/${selected.id}/message-draft`,
-                            "POST",
-                          );
-                          setDraft(d.draft);
-                          setDraftOpen(true);
-                          setReporting(false);
-                        });
-                    }}
-                  >
-                    生成咨询草稿
-                    <ArrowRight size={16} />
-                  </button>
                   <button
                     className="button secondary"
                     onClick={() => favorite(selected)}
@@ -1663,6 +2067,13 @@ export default function App() {
                       fill={selected.is_favorite ? "currentColor" : "none"}
                     />
                     {selected.is_favorite ? "已收藏" : "收藏"}
+                  </button>
+                  <button className="button primary" disabled={selected.status !== "ACTIVE"}
+                    onClick={() => {
+                      if (!needUser()) return;
+                      setChatItem(selected); setChatDraft(""); setModal(null); navigate("messages");
+                    }}>
+                    <MessageCircle size={16} />联系卖家
                   </button>
                 </div>
               )}
@@ -1682,7 +2093,6 @@ export default function App() {
                   onClick={() => {
                     if (needUser()) {
                       setReporting(!reporting);
-                      setDraftOpen(false);
                     }
                   }}
                 >
@@ -1692,39 +2102,6 @@ export default function App() {
               </div>
             </div>
           </div>
-          {draft && draftOpen && (
-            <div className="draft-box">
-              <h3>
-                咨询草稿 <span>尚未发送</span>
-              </h3>
-              <textarea
-                ref={draftRef}
-                aria-label="咨询消息草稿"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                rows={3}
-              />
-              <div>
-                <p>草稿尚未发送。你可以修改后在站内消息中确认发送。</p>
-                <button
-                  className="text-button"
-                  onClick={() => setDraftOpen(false)}
-                >
-                  关闭草稿
-                </button>
-                <button
-                  className="button secondary"
-                  onClick={() => void copy(draft, "咨询草稿已复制，尚未发送")}
-                >
-                  <Copy size={15} />
-                  复制草稿
-                </button>
-                <button className="button primary" onClick={() => {
-                  setChatItem(selected); setChatDraft(draft); setModal(null); navigate("messages");
-                }}><MessageCircle size={15} />去站内消息</button>
-              </div>
-            </div>
-          )}
           {reporting && (
             <form
               className="stack-form report-form"

@@ -170,6 +170,17 @@ class Notification(Base):
     __table_args__ = (UniqueConstraint('intent_id', 'item_id'),)
 
 
+class Announcement(Base):
+    __tablename__ = 'announcements'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(20), default='公告')
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    __table_args__ = (Index('idx_announcements_active', 'active', 'created_at'),)
+
+
 class MatchJob(Base):
     __tablename__ = 'match_jobs'
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

@@ -73,6 +73,16 @@ export type Parsed = {
   condition_grade: string | null;
   clarification: string | null;
 };
+export type ParsedItem = {
+  title: string | null;
+  description: string | null;
+  category: string | null;
+  price: number | null;
+  campus: string;
+  condition_grade: string;
+  tags: string[];
+  clarification: string | null;
+};
 export type Intent = Parsed & {
   id: string;
   raw_query: string;
@@ -110,6 +120,19 @@ export type Notice = {
   available: boolean;
   created_at: string;
 };
+export type SaleFeedbackNotice = {
+  id: string;
+  item: Item;
+  reporter: User;
+  created_at: string;
+};
+export type Announcement = {
+  id: string;
+  title: string;
+  body: string;
+  kind: "公告" | "更新";
+  created_at: string;
+};
 export type Wanted = {
   id: string;
   title: string;
@@ -119,6 +142,7 @@ export type Wanted = {
   campus: string;
   buyer: User;
   is_owner: boolean;
+  status: string;
   created_at: string;
   expires_at: string;
 };

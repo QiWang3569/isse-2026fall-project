@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Flag, LockKeyhole, Mail, MessageCircle, Send, ShieldOff } from "lucide-react";
+import { ArrowLeft, ArrowRight, Flag, LockKeyhole, Mail, MessageCircle, Send, ShieldOff, Sparkles } from "lucide-react";
 import { api, statusText, type ChatMessage, type Conversation, type Item, type Meta, type User } from "./api";
 import { Empty, ProductArt } from "./components";
 
@@ -57,7 +57,7 @@ export function EmailSignIn({ meta, intent, email, setEmail, code, setCode, sent
       <label>
         北大邮箱
         <input type="email" autoComplete="email" required value={email}
-          disabled={sent || busy} placeholder="name@pku.edu.cn 或 name@stu.pku.edu.cn"
+          disabled={sent || busy} placeholder="@pku.edu.cn 或 @stu.pku.edu.cn"
           onChange={(event) => setEmail(event.target.value)} />
       </label>
       {intent === "register" && <><div className="form-grid">
@@ -147,7 +147,7 @@ function PasswordSignIn({ email, setEmail, onSignedIn, onReset }: {
   return <form className="stack-form email-sign-in" onSubmit={(event) => void submit(event)}>
     <p className="auth-description">已设置密码的北大邮箱账号，可以直接登录。</p>
     <label>北大邮箱<input type="email" autoComplete="username" required maxLength={254} value={email}
-      placeholder="name@pku.edu.cn 或 name@stu.pku.edu.cn" onChange={(event) => setEmail(event.target.value)} /></label>
+        placeholder="@pku.edu.cn 或 @stu.pku.edu.cn" onChange={(event) => setEmail(event.target.value)} /></label>
     <label>登录密码<input type="password" autoComplete="current-password" required maxLength={128} value={password}
       onChange={(event) => setPassword(event.target.value)} /></label>
     {error && <p className="form-error" role="alert">{error}</p>}
@@ -189,7 +189,7 @@ export function PasswordSetup({ meta, initialEmail = "", onSignedIn }: {
   return <form className="stack-form email-sign-in" onSubmit={(event) => void submit(event)}>
     <p className="auth-description">验证北大邮箱后设置新密码。完成后，其他设备上的登录会失效。</p>
     <label>北大邮箱<input type="email" autoComplete="email" required maxLength={254} value={email}
-      disabled={sent || busy || !!initialEmail} placeholder="name@pku.edu.cn 或 name@stu.pku.edu.cn"
+      disabled={sent || busy || !!initialEmail} placeholder="@pku.edu.cn 或 @stu.pku.edu.cn"
       onChange={(event) => setEmail(event.target.value)} /></label>
     {sent && <>
       <p className="hint" role="status">验证码已发送至 {email}，10 分钟内有效。</p>
@@ -357,6 +357,22 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
       setLoadedOlder(true);
     } catch (cause) { setError((cause as Error).message); }
   }
+  async function generateDraft() {
+    if (!newItem) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api<{ draft: string }>(
+        `/items/${newItem.id}/message-draft`,
+        "POST",
+      );
+      setDraft(result.draft);
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <section className="chat-page">
       <div className="chat-heading"><MessageCircle size={22} /><div><h1>站内消息</h1><p>关于商品的沟通会保存在这里，只有买卖双方可见。</p></div></div>
@@ -419,6 +435,17 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
               <button type="button" className="text-button" onClick={() => setReportMessageId(null)}>取消</button>
             </form>}
             <form className="chat-compose" onSubmit={(event) => void send(event)}>
+              {newItem && (
+                <button
+                  type="button"
+                  className="text-button chat-draft-tool"
+                  disabled={busy}
+                  onClick={() => void generateDraft()}
+                >
+                  <Sparkles size={15} />
+                  咨询草稿
+                </button>
+              )}
               <label className="sr-only" htmlFor="chat-message">消息内容</label>
               <textarea id="chat-message" value={draft} maxLength={2000} rows={3} disabled={active?.blocked}
                 placeholder="输入想向对方确认的问题…" onChange={(event) => setDraft(event.target.value)} />

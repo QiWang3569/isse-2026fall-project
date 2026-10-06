@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ArrowRight,
   Heart,
@@ -7,28 +7,29 @@ import {
   Package,
   Pencil,
   Sparkles,
+  Sprout,
   UserRound,
 } from "lucide-react";
 import { api, type Meta, type User } from "./api";
 import { Modal } from "./components";
 
 export type PersonalView =
-  "profile" | "intents" | "messages" | "favorites" | "mine";
+  "profile" | "intents" | "messages" | "favorites" | "mine" | "mywanted";
 
 const sections = [
-  {
-    view: "intents",
-    title: "我的代蹲",
-    description: "查看需求和匹配进展",
-    unit: "个任务",
-    icon: Sparkles,
-  },
   {
     view: "messages",
     title: "站内消息",
     description: "继续和同学沟通",
     unit: "个会话",
     icon: MessageCircle,
+  },
+  {
+    view: "intents",
+    title: "我的代蹲",
+    description: "查看需求和匹配进展",
+    unit: "个任务",
+    icon: Sparkles,
   },
   {
     view: "favorites",
@@ -39,10 +40,17 @@ const sections = [
   },
   {
     view: "mine",
-    title: "我发布的",
+    title: "我的售卖",
     description: "管理发布和交易状态",
     unit: "件发布",
     icon: Package,
+  },
+  {
+    view: "mywanted",
+    title: "我的求购",
+    description: "管理我发布的求购",
+    unit: "条求购",
+    icon: Sprout,
   },
 ] as const;
 
@@ -55,13 +63,49 @@ export function ProfileNav({
   onNavigate: (view: PersonalView) => void;
   unread: number;
 }) {
+  const navRef = useRef<HTMLElement>(null);
+  const drag = useRef({ active: false, startX: 0, startLeft: 0, moved: false });
+
+  function down(e: React.PointerEvent<HTMLElement>) {
+    const el = navRef.current;
+    if (!el) return;
+    drag.current = { active: true, startX: e.clientX, startLeft: el.scrollLeft, moved: false };
+  }
+  function move(e: React.PointerEvent<HTMLElement>) {
+    const el = navRef.current;
+    const d = drag.current;
+    if (!el || !d.active) return;
+    const dx = e.clientX - d.startX;
+    if (Math.abs(dx) > 5) d.moved = true;
+    if (d.moved) el.scrollLeft = d.startLeft - dx;
+  }
+  function up() {
+    drag.current.active = false;
+  }
+  function clickCapture(e: React.MouseEvent) {
+    if (drag.current.moved) {
+      e.preventDefault();
+      e.stopPropagation();
+      drag.current.moved = false;
+    }
+  }
+
   return (
-    <nav className="profile-nav" aria-label="我的主页导航">
+    <nav
+      className="profile-nav"
+      aria-label="我的主页导航"
+      ref={navRef}
+      onPointerDown={down}
+      onPointerMove={move}
+      onPointerUp={up}
+      onPointerCancel={up}
+      onClickCapture={clickCapture}
+    >
       <button
         className={view === "profile" ? "active" : ""}
         onClick={() => onNavigate("profile")}
       >
-        主页
+        我的主页
       </button>
       {sections.map(({ view: key, title }) => (
         <button
@@ -79,7 +123,7 @@ export function ProfileNav({
   );
 }
 
-type Overview = { intents: number; listings: number; favorites: number };
+type Overview = { intents: number; listings: number; favorites: number; wanted: number };
 
 export function ProfileHome({
   user,
@@ -91,6 +135,8 @@ export function ProfileHome({
   onAccount,
   onUpdated,
   onError,
+  autoEdit,
+  onAutoEditConsumed,
 }: {
   user: User;
   meta: Meta;
@@ -101,6 +147,8 @@ export function ProfileHome({
   onAccount: () => void;
   onUpdated: (user: User) => void;
   onError: (message: string) => void;
+  autoEdit?: boolean;
+  onAutoEditConsumed?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -114,6 +162,12 @@ export function ProfileHome({
     setBio(user.bio ?? "");
     setColor(user.avatar_color ?? "sage");
   }, [user]);
+  useEffect(() => {
+    if (autoEdit) {
+      openEditor();
+      onAutoEditConsumed?.();
+    }
+  }, [autoEdit]);
 
   function openEditor() {
     setNickname(user.nickname);
@@ -147,6 +201,7 @@ export function ProfileHome({
     messages: conversations,
     favorites: overview?.favorites,
     mine: overview?.listings,
+    mywanted: overview?.wanted,
   };
   return (
     <>

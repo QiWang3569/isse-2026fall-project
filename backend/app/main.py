@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import create_engine, delete, event, func, or_, select, text, update
+from sqlalchemy import case, create_engine, delete, event, func, or_, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import ROOT, Settings
@@ -24,10 +24,10 @@ from .email_auth import code_digest, new_code, normalize_pku_email, send_verific
 from .matching import MatchingRunner
 from .migrations import upgrade_buyer_agent
 from .retention import prune_chat
-from .models import ActionLog, Base, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
+from .models import ActionLog, Announcement, Base, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
 from .password_auth import DUMMY_HASH, hash_password, new_password_error, verify_password
-from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate
-from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, seed
+from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate, WantedUpdate
+from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, seed
 
 
 def iso(value):
@@ -203,6 +203,13 @@ def create_app(settings: Settings | None = None):
                 'email_auth_ready': settings.email_auth_ready,
                 'active_items': db.scalar(select(func.count()).select_from(Item).where(Item.status == 'ACTIVE', Item.expires_at > now()))}
 
+    @app.get('/api/v1/announcements')
+    def announcements(db: Session = Depends(get_db)):
+        rows = db.scalars(select(Announcement).where(Announcement.active == True)
+                          .order_by(Announcement.created_at.desc()).limit(50)).all()
+        return [{'id': a.id, 'title': a.title, 'body': a.body, 'kind': a.kind,
+                 'created_at': iso(a.created_at)} for a in rows]
+
     @app.get('/api/v1/auth/me')
     def me(user=Depends(current_user)):
         return {'user': own_user_out(user)}
@@ -223,6 +230,7 @@ def create_app(settings: Settings | None = None):
             'intents': db.scalar(select(func.count()).select_from(Intent).where(Intent.buyer_id == user.id)),
             'listings': db.scalar(select(func.count()).select_from(Item).where(Item.seller_id == user.id)),
             'favorites': db.scalar(select(func.count()).select_from(Favorite).where(Favorite.user_id == user.id)),
+            'wanted': db.scalar(select(func.count()).select_from(Wanted).where(Wanted.buyer_id == user.id)),
         }
 
     @app.post('/api/v1/auth/email/request-code')
@@ -560,6 +568,19 @@ def create_app(settings: Settings | None = None):
                 db.execute(update(SaleFeedback).where(SaleFeedback.item_id == item.id,
                            SaleFeedback.status == 'OPEN').values(status='CONFIRMED'))
             conversation.deal_status = new_state
+            deal_bodies = {
+                'request': '我已申请预订，请确认',
+                'reserve': '我已确认预订，请等待交接',
+                'decline': '我已拒绝预订请求',
+                'cancel': '我已取消预订',
+                'sold': '我已标记商品售出，请确认收货',
+                'confirm': '我已确认收到商品',
+            }
+            notice = ChatMessage(conversation_id=conversation.id, sender_id=user.id,
+                                 body=deal_bodies[action])
+            db.add(notice)
+            db.flush()
+            conversation.last_message_at = notice.created_at
             log(db, user, 'deal.'+action, conversation.id)
             db.commit()
             result = conversation_out(db, conversation, user)
@@ -571,7 +592,8 @@ def create_app(settings: Settings | None = None):
     def items(q: str = Query('', max_length=120), category: str | None = None, campus: str | None = None,
               min_price: float | None = Query(None, ge=0), max_price: float | None = Query(None, ge=0),
               condition_grade: str | None = None, sort: str = 'recommended', mine: bool = False, favorites: bool = False,
-              page: int = Query(1, ge=1), size: int = Query(12, ge=1, le=50), db: Session = Depends(get_db), user=Depends(current_user)):
+              on_sale: bool = Query(True), page: int = Query(1, ge=1), size: int = Query(12, ge=1, le=50),
+              db: Session = Depends(get_db), user=Depends(current_user)):
         query = select(Item)
         if mine or favorites:
             if not user:
@@ -580,7 +602,7 @@ def create_app(settings: Settings | None = None):
                 query = query.where(Item.seller_id == user.id)
             if favorites:
                 query = query.join(Favorite, Favorite.item_id == Item.id).where(Favorite.user_id == user.id)
-        else:
+        if on_sale:
             query = query.where(Item.status == 'ACTIVE', Item.expires_at > now())
         if category:
             query = query.where(Item.category == category)
@@ -598,16 +620,22 @@ def create_app(settings: Settings | None = None):
                 aliases.extend(FEATURES.get(normalize(word), []))
                 query = query.where(or_(*(column.contains(w, autoescape=True) for column in [Item.title, Item.description] for w in aliases)))
         total = db.scalar(select(func.count()).select_from(query.subquery()))
+        status_rank = case(
+            (Item.status == 'ACTIVE', 0),
+            (Item.status == 'RESERVED', 1),
+            (Item.status == 'SOLD', 3),
+            else_=2,
+        )
         if sort == 'price_asc':
-            query = query.order_by(Item.price_cents, Item.created_at.desc())
+            query = query.order_by(status_rank, Item.price_cents, Item.created_at.desc())
         elif sort == 'price_desc':
-            query = query.order_by(Item.price_cents.desc(), Item.created_at.desc())
+            query = query.order_by(status_rank, Item.price_cents.desc(), Item.created_at.desc())
         elif sort == 'recommended' and user:
             preferred = select(Item.category).join(Favorite).where(Favorite.user_id == user.id)
             categories = list(db.scalars(preferred))
-            query = query.order_by(Item.category.in_(categories).desc(), (Item.campus == user.campus).desc(), Item.created_at.desc())
+            query = query.order_by(status_rank, Item.category.in_(categories).desc(), (Item.campus == user.campus).desc(), Item.created_at.desc())
         else:
-            query = query.order_by(Item.created_at.desc())
+            query = query.order_by(status_rank, Item.created_at.desc())
         return {'items': [item_out(i, db, user) for i in db.scalars(query.offset((page-1)*size).limit(size))], 'total': total, 'page': page, 'size': size}
 
     @app.get('/api/v1/items/{item_id}')
@@ -661,6 +689,37 @@ def create_app(settings: Settings | None = None):
             matching.run_or_wake(job_id)
         return item_out(item, db, user)
 
+    @app.patch('/api/v1/items/{item_id}')
+    def edit_item(item_id: str, data: ItemUpdate, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            item = db.scalar(select(Item).where(Item.id == item_id).with_for_update().execution_options(populate_existing=True))
+            if not item:
+                raise HTTPException(404, '商品不存在')
+            if item.seller_id != user.id:
+                raise HTTPException(403, '只能修改自己发布的商品')
+            if item.status in {'SOLD', 'BANNED'}:
+                raise HTTPException(409, '已售出或审核隐藏的商品不能编辑')
+            values = data.model_dump(exclude_unset=True)
+            if 'images' in values:
+                if not values['images']:
+                    raise HTTPException(422, '请至少保留一张商品照片')
+                for path in values['images']:
+                    image = db.get(Upload, path)
+                    if not image or image.user_id != user.id:
+                        raise HTTPException(422, '只能使用自己上传的商品图片')
+            if 'price' in values:
+                item.price_cents = int(values.pop('price') * 100)
+            for key, value in values.items():
+                setattr(item, key, value)
+            item.embedding = embed(item.title + ' ' + item.description + ' ' + ' '.join(item.tags), settings)
+            item.embedding_model = model_name(settings)
+            jobs = matching.enqueue_item(db, item) if item.status == 'ACTIVE' else []
+            log(db, user, 'item.edit', item.id)
+            db.commit()
+        for job_id in jobs:
+            matching.run_or_wake(job_id)
+        return item_out(item, db, user)
+
     @app.patch('/api/v1/items/{item_id}/status')
     def item_status(item_id: str, data: StatusChange, db: Session = Depends(get_db), user=Depends(require_user)):
         with mutation_lock:
@@ -669,8 +728,8 @@ def create_app(settings: Settings | None = None):
                 raise HTTPException(404, '商品不存在')
             if item.seller_id != user.id:
                 raise HTTPException(403, '只能修改自己发布的商品')
-            if item.status in {'BANNED', 'SOLD'}:
-                raise HTTPException(409, '已售出或审核隐藏的商品不能由卖家重新上架')
+            if item.status == 'BANNED':
+                raise HTTPException(409, '审核隐藏的商品不能由卖家重新上架')
             if data.status == 'RESERVED' and item.status == 'ACTIVE' and db.scalar(
                     select(Conversation).where(Conversation.item_id == item.id,
                                                Conversation.deal_status == 'REQUESTED')):
@@ -726,6 +785,15 @@ def create_app(settings: Settings | None = None):
         return [{'id': row.id, 'status': row.status, 'created_at': iso(row.created_at)}
                 for row in db.scalars(select(SaleFeedback).where(SaleFeedback.item_id == item_id,
                                        SaleFeedback.status == 'OPEN').order_by(SaleFeedback.created_at.desc()))]
+
+    @app.get('/api/v1/sale-feedback/my')
+    def my_sale_feedback(db: Session = Depends(get_db), user=Depends(require_user)):
+        rows = db.scalars(select(SaleFeedback).join(Item, Item.id == SaleFeedback.item_id)
+                          .where(Item.seller_id == user.id, SaleFeedback.status == 'OPEN')
+                          .order_by(SaleFeedback.created_at.desc()).limit(100)).all()
+        return [{'id': r.id, 'item': item_out(db.get(Item, r.item_id), db, user),
+                 'reporter': user_out(db.get(User, r.reporter_id)),
+                 'created_at': iso(r.created_at)} for r in rows]
 
     @app.post('/api/v1/items/{item_id}/sale-feedback/{feedback_id}/review')
     def review_sale_feedback(item_id: str, feedback_id: str, data: DealAction,
@@ -785,6 +853,11 @@ def create_app(settings: Settings | None = None):
     def parse(data: QueryIn, db: Session = Depends(get_db), user=Depends(require_user)):
         db.commit()
         return {'parsed': parse_intent(data.raw_query, settings), 'mode': settings.ai_mode}
+
+    @app.post('/api/v1/items/parse')
+    def parse_item_fields(data: ItemParseRequest, db: Session = Depends(get_db), user=Depends(require_user)):
+        db.commit()
+        return {'parsed': parse_item(data.raw, settings), 'mode': settings.ai_mode}
 
     @app.post('/api/v1/intents/', status_code=201)
     def add_intent(data: IntentCreate, db: Session = Depends(get_db), user=Depends(require_user)):
@@ -902,11 +975,19 @@ def create_app(settings: Settings | None = None):
         return {'ok': True}
 
     @app.get('/api/v1/wanted/')
-    def wanted_list(db: Session = Depends(get_db), user=Depends(current_user)):
-        rows = db.scalars(select(Wanted).where(Wanted.status == 'ACTIVE', Wanted.expires_at > now()).order_by(Wanted.created_at.desc()).limit(100))
+    def wanted_list(mine: bool = False, db: Session = Depends(get_db), user=Depends(current_user)):
+        query = select(Wanted)
+        if mine:
+            if not user:
+                raise HTTPException(401, '请先登录')
+            query = query.where(Wanted.buyer_id == user.id)
+        else:
+            query = query.where(Wanted.status == 'ACTIVE', Wanted.expires_at > now())
+        rows = db.scalars(query.order_by(Wanted.created_at.desc()).limit(100))
         return [{'id': w.id, 'title': w.title, 'description': w.description, 'category': w.category,
                  'budget': w.budget_cents/100, 'campus': w.campus, 'buyer': user_out(db.get(User, w.buyer_id)),
-                 'is_owner': bool(user and w.buyer_id == user.id), 'created_at': iso(w.created_at), 'expires_at': iso(w.expires_at)} for w in rows]
+                 'status': w.status, 'is_owner': bool(user and w.buyer_id == user.id),
+                 'created_at': iso(w.created_at), 'expires_at': iso(w.expires_at)} for w in rows]
 
     @app.post('/api/v1/wanted/', status_code=201)
     def wanted_create(data: WantedCreate, db: Session = Depends(get_db), user=Depends(require_user)):
@@ -916,6 +997,35 @@ def create_app(settings: Settings | None = None):
         log(db, user, 'wanted.create', w.id)
         db.commit()
         return {'id': w.id}
+
+    @app.patch('/api/v1/wanted/{wanted_id}')
+    def wanted_edit(wanted_id: str, data: WantedUpdate, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            w = db.get(Wanted, wanted_id)
+            if not w or w.buyer_id != user.id:
+                raise HTTPException(404, '求购不存在')
+            values = data.model_dump(exclude_unset=True)
+            if 'budget' in values:
+                w.budget_cents = int(values.pop('budget') * 100)
+            for key, value in values.items():
+                setattr(w, key, value)
+            log(db, user, 'wanted.edit', w.id)
+            db.commit()
+        return {'ok': True}
+
+    @app.post('/api/v1/wanted/{wanted_id}/renew')
+    def wanted_renew(wanted_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            w = db.get(Wanted, wanted_id)
+            if not w or w.buyer_id != user.id:
+                raise HTTPException(404, '求购不存在')
+            if w.status == 'ACTIVE':
+                raise HTTPException(409, '求购仍在展示中')
+            w.status = 'ACTIVE'
+            w.expires_at = now() + timedelta(days=7)
+            log(db, user, 'wanted.renew', w.id)
+            db.commit()
+        return {'ok': True}
 
     @app.delete('/api/v1/wanted/{wanted_id}')
     def wanted_close(wanted_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
@@ -1009,6 +1119,35 @@ def create_app(settings: Settings | None = None):
         return [{'id': l.id, 'action': l.action, 'actor': user_out(db.get(User, l.actor_id)), 'target_id': l.target_id,
                  'detail': l.detail, 'created_at': iso(l.created_at)} for l in db.scalars(select(ActionLog).order_by(ActionLog.created_at.desc()).limit(100))]
 
+    @app.post('/api/v1/admin/announcements', status_code=201)
+    def create_announcement(data: AnnouncementCreate, db: Session = Depends(get_db), user=Depends(require_admin)):
+        with mutation_lock:
+            announcement = Announcement(title=data.title, body=data.body, kind=data.kind)
+            db.add(announcement)
+            db.flush()
+            log(db, user, 'announcement.create', announcement.id)
+            db.commit()
+        return {'id': announcement.id}
+
+    @app.patch('/api/v1/admin/announcements/{announcement_id}')
+    def update_announcement(announcement_id: str, data: AnnouncementUpdate,
+                            db: Session = Depends(get_db), user=Depends(require_admin)):
+        with mutation_lock:
+            announcement = db.get(Announcement, announcement_id)
+            if not announcement:
+                raise HTTPException(404, '公告不存在')
+            if data.title is not None:
+                announcement.title = data.title
+            if data.body is not None:
+                announcement.body = data.body
+            if data.kind is not None:
+                announcement.kind = data.kind
+            if data.active is not None:
+                announcement.active = data.active
+            log(db, user, 'announcement.update', announcement.id)
+            db.commit()
+        return {'ok': True}
+
     app.mount('/uploads', StaticFiles(directory=upload_dir), name='uploads')
     frontend = ROOT / 'frontend/dist'
     if frontend.exists():
@@ -1018,7 +1157,7 @@ def create_app(settings: Settings | None = None):
         def spa(path: str):
             if path.startswith(('api/', 'uploads/')):
                 raise HTTPException(404, '接口不存在')
-            return FileResponse(frontend / 'index.html')
+            return FileResponse(frontend / 'index.html', headers={'Cache-Control': 'no-store'})
     return app
 
 

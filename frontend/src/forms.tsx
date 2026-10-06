@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { ArrowRight, Check, ImagePlus, Sparkles, X } from "lucide-react";
-import { api, type Meta, type Parsed, type Item, type Wanted } from "./api";
+import { api, type Meta, type Parsed, type ParsedItem, type Item, type Wanted } from "./api";
 
 type Common = { meta: Meta; onDone: () => void };
 
@@ -198,11 +198,48 @@ export function PublishForm({
   meta,
   onDone,
   prefill,
-}: Common & { prefill?: Wanted | null }) {
+  editingItem,
+}: Common & { prefill?: Wanted | null; editingItem?: Item | null }) {
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [images, setImages] = useState<string[]>([]);
+  const [images, setImages] = useState<string[]>(editingItem?.images || []);
   const [error, setError] = useState("");
+  const [raw, setRaw] = useState("");
+  const [parsing, setParsing] = useState(false);
+  const [title, setTitle] = useState(editingItem?.title || prefill?.title || "");
+  const [description, setDescription] = useState(editingItem?.description || "");
+  const [category, setCategory] = useState(editingItem?.category || prefill?.category || meta.categories[0]);
+  const [price, setPrice] = useState(editingItem ? String(editingItem.price) : "");
+  const [campus, setCampus] = useState(editingItem?.campus || prefill?.campus || meta.campuses[0]);
+  const [condition, setCondition] = useState(editingItem?.condition_grade || "95新");
+  const [tags, setTags] = useState((editingItem?.tags || []).join("，"));
+
+  async function smartFill() {
+    if (raw.trim().length < 5) {
+      setError("请先输入一段商品描述");
+      return;
+    }
+    setParsing(true);
+    setError("");
+    try {
+      const result = await api<{ parsed: ParsedItem }>("/items/parse", "POST", {
+        raw: raw.trim(),
+      });
+      const p = result.parsed;
+      if (p.title) setTitle(p.title);
+      if (p.description) setDescription(p.description);
+      if (p.category) setCategory(p.category);
+      if (p.price != null) setPrice(String(p.price));
+      if (p.campus) setCampus(p.campus);
+      if (p.condition_grade) setCondition(p.condition_grade);
+      if (p.tags.length) setTags(p.tags.join("，"));
+      if (p.clarification) setError(p.clarification);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setParsing(false);
+    }
+  }
   async function upload(files: FileList | null) {
     if (!files?.length) return;
     if (images.length + files.length > 3) {
@@ -232,20 +269,22 @@ export function PublishForm({
     }
     setBusy(true);
     setError("");
-    const data = new FormData(e.currentTarget);
     try {
-      await api<Item>("/items/", "POST", {
-        title: data.get("title"),
-        description: data.get("description"),
-        category: data.get("category"),
-        price: Number(data.get("price")),
-        campus: data.get("campus"),
-        condition_grade: data.get("condition"),
-        tags: String(data.get("tags"))
-          .split(/[，,\s]+/)
-          .filter(Boolean),
+      const payload = {
+        title,
+        description,
+        category,
+        price: Number(price),
+        campus,
+        condition_grade: condition,
+        tags: tags.split(/[，,\s]+/).filter(Boolean),
         images,
-      });
+      };
+      if (editingItem) {
+        await api<Item>(`/items/${editingItem.id}`, "PATCH", payload);
+      } else {
+        await api<Item>("/items/", "POST", payload);
+      }
       onDone();
     } catch (e) {
       setError((e as Error).message);
@@ -263,6 +302,30 @@ export function PublishForm({
           </p>
         </div>
       )}
+      <div className="form-callout">
+        <Sparkles size={22} />
+        <p>
+          懒人模式：把要卖的东西用一句话说出来，点“智能识别并填充”，信息会自动填好，你再补充照片即可。
+        </p>
+      </div>
+      <label>
+        一句话描述要卖的好物
+        <textarea
+          value={raw}
+          onChange={(e) => setRaw(e.target.value)}
+          rows={3}
+          placeholder="例如：出一台九成新的罗技静音鼠标，50 元，燕园面交"
+        />
+      </label>
+      <button
+        type="button"
+        className="button secondary"
+        disabled={parsing || busy}
+        onClick={() => void smartFill()}
+      >
+        <Sparkles size={16} />
+        {parsing ? "识别中…" : "智能识别并填充"}
+      </button>
       <div>
         <span className="field-title">
           商品照片 <small>1–3 张 · JPG / PNG / WebP · 每张不超过 6 MB</small>
@@ -301,21 +364,23 @@ export function PublishForm({
       <label>
         给好物起个名字
         <input
-          name="title"
           required
           minLength={2}
           maxLength={120}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
           placeholder="例如：罗技 MX Master 3S 静音鼠标"
         />
       </label>
       <label>
         描述一下它
         <textarea
-          name="description"
           required
           minLength={5}
           maxLength={3000}
           rows={3}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
           placeholder="使用情况、配件、瑕疵、方便的交接时间…真实描述会让交易更顺利。"
         />
       </label>
@@ -323,8 +388,8 @@ export function PublishForm({
         <label>
           物品分类
           <select
-            name="category"
-            defaultValue={prefill?.category || meta.categories[0]}
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
           >
             {meta.categories.map((c) => (
               <option key={c}>{c}</option>
@@ -334,20 +399,21 @@ export function PublishForm({
         <label>
           转让价格（元）
           <input
-            name="price"
             required
             type="number"
             min="0"
             max="999999"
             step="0.01"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
             placeholder="0.00"
           />
         </label>
         <label>
           所在校区
           <select
-            name="campus"
-            defaultValue={prefill?.campus || meta.campuses[0]}
+            value={campus}
+            onChange={(e) => setCampus(e.target.value)}
           >
             {meta.campuses.map((c) => (
               <option key={c}>{c}</option>
@@ -356,7 +422,10 @@ export function PublishForm({
         </label>
         <label>
           商品成色
-          <select name="condition" defaultValue="95新">
+          <select
+            value={condition}
+            onChange={(e) => setCondition(e.target.value)}
+          >
             {meta.conditions.map((c) => (
               <option key={c}>{c}</option>
             ))}
@@ -365,7 +434,11 @@ export function PublishForm({
       </div>
       <label>
         标签 <small>选填，最多 8 个</small>
-        <input name="tags" placeholder="例如：鼠标，静音，无线" />
+        <input
+          value={tags}
+          onChange={(e) => setTags(e.target.value)}
+          placeholder="例如：鼠标，静音，无线"
+        />
       </label>
       <p className="hint">
         商品默认在售 14 天。成交后记得标记“已售出”，让彼此少一点等待。
@@ -376,7 +449,13 @@ export function PublishForm({
         </p>
       )}
       <button className="button primary full" disabled={busy || uploading}>
-        {busy ? "正在发布…" : "发布好物"}
+        {busy
+          ? editingItem
+            ? "正在保存…"
+            : "正在发布…"
+          : editingItem
+            ? "保存修改"
+            : "发布好物"}
         <ArrowRight size={17} />
       </button>
     </form>
@@ -387,22 +466,28 @@ export function WantedForm({
   meta,
   onDone,
   initial,
-}: Common & { initial: string }) {
+  editingWanted,
+}: Common & { initial: string; editingWanted?: Wanted | null }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
     setError("");
-    const data = new FormData(e.currentTarget);
     try {
-      await api("/wanted/", "POST", {
+      const data = new FormData(e.currentTarget);
+      const payload = {
         title: data.get("title"),
         description: data.get("description"),
         category: data.get("category"),
         budget: Number(data.get("budget")),
         campus: data.get("campus"),
-      });
+      };
+      if (editingWanted) {
+        await api(`/wanted/${editingWanted.id}`, "PATCH", payload);
+      } else {
+        await api("/wanted/", "POST", payload);
+      }
       onDone();
     } catch (e) {
       setError((e as Error).message);
@@ -422,7 +507,7 @@ export function WantedForm({
           required
           minLength={2}
           maxLength={120}
-          defaultValue={initial}
+          defaultValue={editingWanted?.title || initial}
           placeholder="求一本离散数学教材"
         />
       </label>
@@ -434,13 +519,14 @@ export function WantedForm({
           minLength={5}
           maxLength={1000}
           rows={3}
+          defaultValue={editingWanted?.description}
           placeholder="型号、版本、能接受的成色、交接时间…"
         />
       </label>
       <div className="form-grid">
         <label>
           物品分类
-          <select name="category">
+          <select name="category" defaultValue={editingWanted?.category}>
             {meta.categories.map((c) => (
               <option key={c}>{c}</option>
             ))}
@@ -455,11 +541,12 @@ export function WantedForm({
             min="0"
             max="999999"
             step="0.01"
+            defaultValue={editingWanted ? String(editingWanted.budget) : undefined}
           />
         </label>
         <label>
           交接校区
-          <select name="campus">
+          <select name="campus" defaultValue={editingWanted?.campus}>
             {meta.campuses.map((c) => (
               <option key={c}>{c}</option>
             ))}
@@ -473,7 +560,13 @@ export function WantedForm({
         </p>
       )}
       <button className="button primary full" disabled={busy}>
-        {busy ? "发布中…" : "发布求购"}
+        {busy
+          ? editingWanted
+            ? "保存中…"
+            : "发布中…"
+          : editingWanted
+            ? "保存修改"
+            : "发布求购"}
         <ArrowRight size={17} />
       </button>
     </form>

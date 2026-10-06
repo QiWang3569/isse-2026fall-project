@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type CSSProperties, type ReactNode } from "react";
 import {
   ArrowRight,
   Heart,
@@ -346,11 +346,13 @@ export function Modal({
   children,
   onClose,
   wide = false,
+  style,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  style?: CSSProperties;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -403,6 +405,7 @@ export function Modal({
     >
       <div
         className={`modal ${wide ? "wide" : ""}`}
+        style={style}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

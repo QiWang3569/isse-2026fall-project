@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
-CATEGORIES = ['课程资料与书籍', '数码与影音', '校园出行与运动', '宿舍生活与家电', '美妆服饰与周边']
+CATEGORIES = ['课程资料与书籍', '数码与影音', '校园出行与运动', '宿舍生活与家电', '美妆服饰与周边', '人员招募']
 CAMPUSES = ['燕园校本部', '万柳学区', '医学部', '昌平新校区', '不限校区']
 CONDITIONS = ['全新', '95新', '9成新', '8成新', '基本可用']
 
@@ -100,6 +100,33 @@ class WantedCreate(StrictModel):
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
 
 
+class ItemUpdate(StrictModel):
+    title: str | None = Field(default=None, min_length=2, max_length=120)
+    description: str | None = Field(default=None, min_length=5, max_length=3000)
+    category: str | None = None
+    price: Decimal | None = Field(default=None, ge=0, le=999999, max_digits=8, decimal_places=2)
+    campus: str | None = None
+    condition_grade: str | None = None
+    tags: list[str] | None = Field(default=None, max_length=8)
+    images: list[str] | None = Field(default=None, max_length=3)
+
+    category_valid = field_validator('category')(classmethod(lambda cls, v: ItemCreate.category_valid(v) if v is not None else None))
+    campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v) if v is not None else None))
+    condition_valid = field_validator('condition_grade')(classmethod(lambda cls, v: ItemCreate.condition_valid(v) if v is not None else None))
+    tags_valid = field_validator('tags')(classmethod(lambda cls, v: ItemCreate.tags_valid(v) if v is not None else None))
+
+
+class WantedUpdate(StrictModel):
+    title: str | None = Field(default=None, min_length=2, max_length=120)
+    description: str | None = Field(default=None, min_length=5, max_length=1000)
+    category: str | None = None
+    budget: Decimal | None = Field(default=None, ge=0, le=999999, decimal_places=2)
+    campus: str | None = None
+
+    category_valid = field_validator('category')(classmethod(lambda cls, v: ItemCreate.category_valid(v) if v is not None else None))
+    campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v) if v is not None else None))
+
+
 class ReportCreate(StrictModel):
     reason: str = Field(min_length=5, max_length=1000)
 
@@ -175,3 +202,36 @@ class DealAction(StrictModel):
 
 class IntentComplete(StrictModel):
     item_id: str | None = None
+
+
+class AnnouncementCreate(StrictModel):
+    title: str = Field(min_length=2, max_length=200)
+    body: str = Field(min_length=5, max_length=5000)
+    kind: Literal['公告', '更新'] = '公告'
+
+
+class AnnouncementUpdate(StrictModel):
+    title: str | None = Field(default=None, min_length=2, max_length=200)
+    body: str | None = Field(default=None, min_length=5, max_length=5000)
+    kind: Literal['公告', '更新'] | None = None
+    active: bool | None = None
+
+
+class ItemParseRequest(StrictModel):
+    raw: str = Field(min_length=5, max_length=3000)
+
+
+class ParsedItem(StrictModel):
+    title: str | None = Field(default=None, max_length=120)
+    description: str | None = Field(default=None, max_length=3000)
+    category: str | None = None
+    price: Decimal | None = Field(default=None, ge=0, le=999999, decimal_places=2)
+    campus: str = '燕园校本部'
+    condition_grade: str = '95新'
+    tags: list[str] = Field(default_factory=list, max_length=8)
+    clarification: str | None = Field(default=None, max_length=500)
+
+    category_valid = field_validator('category')(classmethod(lambda cls, v: ItemCreate.category_valid(v) if v is not None else None))
+    campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
+    condition_valid = field_validator('condition_grade')(classmethod(lambda cls, v: ItemCreate.condition_valid(v) if v else None))
+    tags_valid = field_validator('tags')(classmethod(lambda cls, v: ItemCreate.tags_valid(v)))
