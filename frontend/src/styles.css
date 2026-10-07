@@ -2872,3 +2872,185 @@ footer .brand svg {
   .draft-card-actions .button { flex: 1; }
   .publish-tabs button { font-size: 11px; }
 }
+
+/* The same content and controls remain usable in both color schemes. */
+:root[data-theme="dark"] {
+  --green: #75c69a;
+  --deep: #c4edd3;
+  --muted: #a7baab;
+  --line: #34483b;
+  --light: #26392c;
+  color: #e0eae1;
+  background: #121c16;
+}
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea {
+  color: #e2eee5;
+  background: #1d2d23;
+  border-color: #3b5241;
+}
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder { color: #91a596; }
+:root[data-theme="dark"] .sidebar { background: #18271e; border-color: var(--line); }
+:root[data-theme="dark"] .topbar { background: #1b2b22ef; }
+:root[data-theme="dark"] .mobile-search,
+:root[data-theme="dark"] .avatar-menu,
+:root[data-theme="dark"] .modal,
+:root[data-theme="dark"] .chat-layout,
+:root[data-theme="dark"] .item-card,
+:root[data-theme="dark"] .intent-card,
+:root[data-theme="dark"] .wanted-card,
+:root[data-theme="dark"] .profile-card,
+:root[data-theme="dark"] .review-card,
+:root[data-theme="dark"] .announcement,
+:root[data-theme="dark"] .draft-card,
+:root[data-theme="dark"] .compare-tray {
+  background: #1e2d24;
+  border-color: var(--line);
+  box-shadow: 0 8px 28px #07120b33;
+}
+:root[data-theme="dark"] .hero,
+:root[data-theme="dark"] .profile-hero {
+  background: linear-gradient(115deg, #294638, #253b2e 58%, #3a352b);
+  border-color: #405847;
+}
+:root[data-theme="dark"] .intent-banner,
+:root[data-theme="dark"] .info-strip,
+:root[data-theme="dark"] .form-callout,
+:root[data-theme="dark"] .parsed-box,
+:root[data-theme="dark"] .draft-box,
+:root[data-theme="dark"] .agent-questions,
+:root[data-theme="dark"] .chat-deal-actions,
+:root[data-theme="dark"] .auth-tabs,
+:root[data-theme="dark"] .publish-tabs,
+:root[data-theme="dark"] .announcement-kind,
+:root[data-theme="dark"] .category-label,
+:root[data-theme="dark"] .empty-icon,
+:root[data-theme="dark"] .login-options button,
+:root[data-theme="dark"] .notice.unread {
+  background: #293b2e;
+  border-color: var(--line);
+}
+:root[data-theme="dark"] .intent-banner form,
+:root[data-theme="dark"] .auth-tabs button.active,
+:root[data-theme="dark"] .publish-tabs button.active,
+:root[data-theme="dark"] .nav-item.active,
+:root[data-theme="dark"] .button.secondary,
+:root[data-theme="dark"] .upload-button,
+:root[data-theme="dark"] .upload-preview button,
+:root[data-theme="dark"] .condition-chip,
+:root[data-theme="dark"] .favorite-button {
+  background: #334a39;
+  border-color: #48614d;
+  color: #dcebdd;
+}
+:root[data-theme="dark"] .chat-bubble { background: #2a3c30; }
+:root[data-theme="dark"] .chat-bubble.own { background: #345b42; }
+:root[data-theme="dark"] .floating-note,
+:root[data-theme="dark"] .intent-symbol { background: #38503d; color: #e0eee0; }
+:root[data-theme="dark"] .chat-list-item:hover,
+:root[data-theme="dark"] .chat-list-item.active,
+:root[data-theme="dark"] .nav-item:hover,
+:root[data-theme="dark"] .avatar-menu-item:hover,
+:root[data-theme="dark"] .profile-nav button:hover,
+:root[data-theme="dark"] .category-tabs button:hover,
+:root[data-theme="dark"] .icon-button:hover,
+:root[data-theme="dark"] .sidebar-contact:hover { background: #304638; }
+:root[data-theme="dark"] .profile-nav button.active,
+:root[data-theme="dark"] .category-tabs .active,
+:root[data-theme="dark"] .pills > span,
+:root[data-theme="dark"] .card-tags span,
+:root[data-theme="dark"] .auth-steps span.current,
+:root[data-theme="dark"] .password-rules span.met,
+:root[data-theme="dark"] .query-tag,
+:root[data-theme="dark"] .compare-chip,
+:root[data-theme="dark"] .draft-status,
+:root[data-theme="dark"] .draft-notice { background: #35533d; color: #c9e9ce; }
+:root[data-theme="dark"] .auth-steps span,
+:root[data-theme="dark"] .password-rules span { background: #304237; color: #b1c4b4; }
+:root[data-theme="dark"] .button.primary { color: #12271a; }
+:root[data-theme="dark"] .button.primary:hover:not(:disabled) { background: #92d8ac; }
+:root[data-theme="dark"] .button.dark { background: #3d7958; color: #ecf7ec; }
+:root[data-theme="dark"] .form-error { background: #4a3029; color: #ffd2bf; }
+:root[data-theme="dark"] .announcement-kind.update { background: #4b432b; color: #efd49a; }
+:root[data-theme="dark"] .profile-icon-intents,
+:root[data-theme="dark"] .profile-icon-messages,
+:root[data-theme="dark"] .profile-icon-favorites,
+:root[data-theme="dark"] .profile-icon-mine { background: #395044; color: #c1dec8; }
+:root[data-theme="dark"] .avatar-color-sage,
+:root[data-theme="dark"] .avatar-color-blue,
+:root[data-theme="dark"] .avatar-color-peach,
+:root[data-theme="dark"] .avatar-color-lavender { background: #45634e; color: #f0f8ee; }
+:root[data-theme="dark"] .hero h1,
+:root[data-theme="dark"] .profile-identity h1,
+:root[data-theme="dark"] .profile-section-heading h2,
+:root[data-theme="dark"] .page-intro h1,
+:root[data-theme="dark"] .section-heading h2,
+:root[data-theme="dark"] .modal-head h2,
+:root[data-theme="dark"] .intent-card h3,
+:root[data-theme="dark"] .wanted-card h3,
+:root[data-theme="dark"] .announcement h3,
+:root[data-theme="dark"] .profile-card-copy strong,
+:root[data-theme="dark"] .card-title,
+:root[data-theme="dark"] .draft-card-main h3,
+:root[data-theme="dark"] .intent-banner h2 { color: #e4f2e5; }
+:root[data-theme="dark"] .hero p,
+:root[data-theme="dark"] .profile-bio,
+:root[data-theme="dark"] .profile-location,
+:root[data-theme="dark"] .profile-section-heading p,
+:root[data-theme="dark"] .page-intro p,
+:root[data-theme="dark"] .section-heading p,
+:root[data-theme="dark"] .wanted-card > p,
+:root[data-theme="dark"] .announcement p,
+:root[data-theme="dark"] .detail-description,
+:root[data-theme="dark"] .draft-card-main p,
+:root[data-theme="dark"] .auth-description,
+:root[data-theme="dark"] .stack-form label,
+:root[data-theme="dark"] .review-form label,
+:root[data-theme="dark"] .card-foot,
+:root[data-theme="dark"] .hint,
+:root[data-theme="dark"] .muted { color: #b5c8b8; }
+:root[data-theme="dark"] .empty,
+:root[data-theme="dark"] .empty p,
+:root[data-theme="dark"] .empty h3,
+:root[data-theme="dark"] .notice p,
+:root[data-theme="dark"] .notice-group-title { color: #b8cbb9; }
+:root[data-theme="dark"] .brand-caption,
+:root[data-theme="dark"] .nav-item,
+:root[data-theme="dark"] .sidebar-contact,
+:root[data-theme="dark"] .global-search,
+:root[data-theme="dark"] .global-search input,
+:root[data-theme="dark"] .campus-picker,
+:root[data-theme="dark"] .icon-button,
+:root[data-theme="dark"] .avatar-menu-item,
+:root[data-theme="dark"] .category-tabs button,
+:root[data-theme="dark"] .filter-row,
+:root[data-theme="dark"] .filter-row select,
+:root[data-theme="dark"] .text-button,
+:root[data-theme="dark"] .draft-card-main small,
+:root[data-theme="dark"] footer { color: #a8c0ad; }
+:root[data-theme="dark"] .nav-item.active,
+:root[data-theme="dark"] .profile-nav button.active,
+:root[data-theme="dark"] .category-tabs .active,
+:root[data-theme="dark"] .auth-tabs button.active,
+:root[data-theme="dark"] .publish-tabs button.active { color: #ddf4e3; }
+:root[data-theme="dark"] .publish-tabs button,
+:root[data-theme="dark"] .auth-tabs button { color: #b7cbb9; }
+:root[data-theme="dark"] .publish-tabs button.active,
+:root[data-theme="dark"] .auth-tabs button.active { color: #e5f5e7; }
+:root[data-theme="dark"] .price,
+:root[data-theme="dark"] .wanted-budget strong { color: #f1ad82; }
+:root[data-theme="dark"] .modal-backdrop { background: #061109b8; }
+:root[data-theme="dark"] .form-callout,
+:root[data-theme="dark"] .form-callout p,
+:root[data-theme="dark"] .parsed-box h3,
+:root[data-theme="dark"] .field-title,
+:root[data-theme="dark"] .draft-box h3 { color: #c7e6cb; }
+:root[data-theme="dark"] .notice,
+:root[data-theme="dark"] .login-options button,
+:root[data-theme="dark"] .query-tag,
+:root[data-theme="dark"] .chat-start-item { border-color: var(--line); }
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle, .publish-tabs button { transition: none; }
+}

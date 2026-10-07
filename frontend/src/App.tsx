@@ -25,6 +25,7 @@ import {
   MapPin,
   Megaphone,
   Monitor,
+  Moon,
   Pause,
   Play,
   Plus,
@@ -33,6 +34,7 @@ import {
   Shirt,
   Sparkles,
   Sprout,
+  Sun,
   Upload,
   Users,
   X,
@@ -108,6 +110,15 @@ function currentView(): View {
   return (validViews.includes(v) ? v : "market") as View;
 }
 
+function initialTheme(): "light" | "dark" {
+  let saved: string | null = null;
+  try { saved = localStorage.getItem("yandu-theme"); } catch { /* Storage may be disabled. */ }
+  const theme = saved === "light" || saved === "dark" ? saved :
+    window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  document.documentElement.dataset.theme = theme;
+  return theme;
+}
+
 function useResource<T>(
   url: string,
   revision: number,
@@ -159,6 +170,7 @@ function useResource<T>(
 }
 
 export default function App() {
+  const [theme, setTheme] = useState<"light" | "dark">(initialTheme);
   const [meta, setMeta] = useState<Meta | null>(null),
     [user, setUser] = useState<User | null>(null);
   const [view, setView] = useState<View>(currentView),
@@ -197,6 +209,12 @@ export default function App() {
   const categoryDrag = useRef({ active: false, startX: 0, startLeft: 0, moved: false });
   const sidebarNavRef = useRef<HTMLElement>(null);
   const sidebarNavDrag = useRef({ active: false, startX: 0, startLeft: 0, moved: false });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    try { localStorage.setItem("yandu-theme", theme); } catch { /* Keep the current choice for this visit. */ }
+  }, [theme]);
 
   function categoryDown(e: React.PointerEvent<HTMLDivElement>) {
     const el = categoryTabsRef.current;
@@ -661,6 +679,13 @@ export default function App() {
             <kbd>Enter</kbd>
           </form>
           <div className="top-actions">
+            <button className="icon-button theme-toggle" type="button"
+              aria-label={theme === "dark" ? "切换到日间模式" : "切换到夜间模式"}
+              title={theme === "dark" ? "日间模式" : "夜间模式"}
+              aria-pressed={theme === "dark"}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+              {theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
+            </button>
             <label className="campus-picker">
               <MapPin size={16} />
               <select
