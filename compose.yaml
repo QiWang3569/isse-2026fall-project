@@ -1,18 +1,55 @@
 services:
   postgres:
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: yandu
-      POSTGRES_USER: yandu
-      POSTGRES_PASSWORD: yandu-local-only
+      POSTGRES_DB: ${POSTGRES_DB:-yandu}
+      POSTGRES_USER: ${POSTGRES_USER:-yandu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - yandu-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U yandu -d yandu"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 3s
       retries: 10
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DEMO_MODE: "false"
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-yandu}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-yandu}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - app_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+  backup:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-yandu}
+      PGDATABASE: ${POSTGRES_DB:-yandu}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    entrypoint: ["sh", "/usr/local/bin/backup_postgres.sh"]
+    volumes:
+      - ./scripts/backup_postgres.sh:/usr/local/bin/backup_postgres.sh:ro
+      - ./data/backups/postgres:/backups
 volumes:
   yandu-postgres:
+  app_data:
