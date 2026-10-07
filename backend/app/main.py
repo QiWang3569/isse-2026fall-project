@@ -25,9 +25,9 @@ from .database import prepare_database, retire_demo_data
 from .email_auth import code_digest, new_code, normalize_pku_email, send_verification_email
 from .matching import MatchingRunner
 from .retention import prune_chat
-from .models import ActionLog, Announcement, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
+from .models import ActionLog, Announcement, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
 from .password_auth import DUMMY_HASH, hash_password, new_password_error, verify_password
-from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate, WantedUpdate
+from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate, WantedUpdate
 from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, seed
 
 
@@ -164,6 +164,14 @@ def create_app(settings: Settings | None = None):
                 'is_owner': bool(user and user.id == item.seller_id), 'is_demo': item.id.startswith('sample-'),
                 'sale_feedback_count': db.scalar(select(func.count()).select_from(SaleFeedback).where(
                     SaleFeedback.item_id == item.id, SaleFeedback.status == 'OPEN')) if user and user.id == item.seller_id else 0}
+
+    def draft_out(draft):
+        return {'id': draft.id, 'raw': draft.raw, 'title': draft.title,
+                'description': draft.description, 'category': draft.category,
+                'price': draft.price_cents / 100 if draft.price_cents is not None else None,
+                'campus': draft.campus, 'condition_grade': draft.condition_grade,
+                'tags': draft.tags, 'images': draft.images, 'clarification': draft.clarification,
+                'created_at': iso(draft.created_at), 'updated_at': iso(draft.updated_at)}
 
     def intent_out(intent, db):
         count = db.scalar(select(func.count()).select_from(Notification).where(Notification.intent_id == intent.id, Notification.verdict != 'NO_MATCH'))
@@ -671,19 +679,27 @@ def create_app(settings: Settings | None = None):
         db.commit()
         return {'url': path}
 
-    @app.post('/api/v1/items/', status_code=201)
-    def publish(data: ItemCreate, db: Session = Depends(get_db), user=Depends(require_user)):
+    def publish_item(data: ItemCreate, db: Session, user: User, draft_id: str | None = None):
         if not data.images:
             raise HTTPException(422, '请至少上传一张商品照片')
         for path in data.images:
             image = db.get(Upload, path)
             if not image or image.user_id != user.id:
                 raise HTTPException(422, '只能使用自己上传的商品图片')
+        if draft_id and not db.scalar(select(ItemDraft.id).where(ItemDraft.id == draft_id,
+                                                                  ItemDraft.seller_id == user.id)):
+            raise HTTPException(404, '待发布商品不存在')
         values = data.model_dump(exclude={'price'})
         db.commit()  # Release the read transaction before contacting a provider.
         vector = embed(data.title + ' ' + data.description + ' ' + ' '.join(data.tags), settings)
         item = Item(**values, seller_id=user.id, price_cents=int(data.price*100), embedding=vector, embedding_model=model_name(settings))
         with mutation_lock:
+            if draft_id:
+                draft = db.scalar(select(ItemDraft).where(ItemDraft.id == draft_id,
+                    ItemDraft.seller_id == user.id).with_for_update())
+                if not draft:
+                    raise HTTPException(404, '待发布商品不存在')
+                db.delete(draft)
             db.add(item)
             db.flush()
             jobs = matching.enqueue_item(db, item)
@@ -692,6 +708,84 @@ def create_app(settings: Settings | None = None):
         for job_id in jobs:
             matching.run_or_wake(job_id)
         return item_out(item, db, user)
+
+    @app.post('/api/v1/items/', status_code=201)
+    def publish(data: ItemCreate, db: Session = Depends(get_db), user=Depends(require_user)):
+        return publish_item(data, db, user)
+
+    @app.get('/api/v1/item-drafts/')
+    def list_item_drafts(db: Session = Depends(get_db), user=Depends(require_user)):
+        drafts = db.scalars(select(ItemDraft).where(ItemDraft.seller_id == user.id)
+                            .order_by(ItemDraft.created_at.desc())).all()
+        return [draft_out(draft) for draft in drafts]
+
+    @app.post('/api/v1/item-drafts/import', status_code=201)
+    def import_item_drafts(data: ItemDraftImport, db: Session = Depends(get_db), user=Depends(require_user)):
+        lines = [line.strip() for line in data.text.splitlines() if line.strip()]
+        if not 1 <= len(lines) <= 10:
+            raise HTTPException(422, '每次可导入 1–10 件商品，每行一件')
+        for index, line in enumerate(lines, 1):
+            if not 5 <= len(line) <= 3000:
+                raise HTTPException(422, f'第 {index} 件商品需要 5–3000 字')
+        db.commit()  # Do not keep a database transaction open during model calls.
+        parsed = [parse_item(line, settings) for line in lines]
+        with mutation_lock:
+            db.scalar(select(User).where(User.id == user.id).with_for_update())
+            count = db.scalar(select(func.count()).select_from(ItemDraft).where(ItemDraft.seller_id == user.id))
+            if count + len(lines) > 50:
+                raise HTTPException(409, '待发布商品最多保存 50 件，请先发布或删除部分草稿')
+            drafts = []
+            for line, fields in zip(lines, parsed):
+                draft = ItemDraft(seller_id=user.id, raw=line, title=fields.title,
+                                  description=fields.description, category=fields.category,
+                                  price_cents=int(fields.price * 100) if fields.price is not None else None,
+                                  campus=fields.campus, condition_grade=fields.condition_grade,
+                                  tags=fields.tags, images=[], clarification=fields.clarification)
+                db.add(draft)
+                drafts.append(draft)
+            db.flush()
+            log(db, user, 'item_draft.import', drafts[0].id, f'count={len(drafts)}')
+            db.commit()
+        return [draft_out(draft) for draft in drafts]
+
+    def owned_item_draft(db, draft_id, user, lock=False):
+        query = select(ItemDraft).where(ItemDraft.id == draft_id, ItemDraft.seller_id == user.id)
+        draft = db.scalar(query.with_for_update() if lock else query)
+        if not draft:
+            raise HTTPException(404, '待发布商品不存在')
+        return draft
+
+    @app.patch('/api/v1/item-drafts/{draft_id}')
+    def update_item_draft(draft_id: str, data: ItemDraftUpdate,
+                          db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            draft = owned_item_draft(db, draft_id, user, lock=True)
+            values = data.model_dump(exclude_unset=True, exclude={'price'})
+            if any(values.get(key) is None for key in ('raw', 'campus', 'condition_grade', 'tags', 'images') if key in values):
+                raise HTTPException(422, '原始描述、校区、成色、标签和照片不能设为空')
+            for path in values.get('images', []):
+                image = db.get(Upload, path)
+                if not image or image.user_id != user.id:
+                    raise HTTPException(422, '只能使用自己上传的商品图片')
+            if 'price' in data.model_fields_set:
+                draft.price_cents = int(data.price * 100) if data.price is not None else None
+            for key, value in values.items():
+                setattr(draft, key, value)
+            draft.updated_at = now()
+            db.commit()
+        return draft_out(draft)
+
+    @app.delete('/api/v1/item-drafts/{draft_id}', status_code=204)
+    def delete_item_draft(draft_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            db.delete(owned_item_draft(db, draft_id, user, lock=True))
+            db.commit()
+        return Response(status_code=204)
+
+    @app.post('/api/v1/item-drafts/{draft_id}/publish', status_code=201)
+    def publish_item_draft(draft_id: str, data: ItemCreate,
+                           db: Session = Depends(get_db), user=Depends(require_user)):
+        return publish_item(data, db, user, draft_id)
 
     @app.patch('/api/v1/items/{item_id}')
     def edit_item(item_id: str, data: ItemUpdate, db: Session = Depends(get_db), user=Depends(require_user)):

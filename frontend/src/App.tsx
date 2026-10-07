@@ -71,7 +71,7 @@ import {
   Modal,
   ProductArt,
 } from "./components";
-import { IntentForm, PublishForm, WantedForm } from "./forms";
+import { IntentForm, PublishForm, PublishWorkspace, WantedForm } from "./forms";
 import { AuthMethods, ChatCenter, PasswordSetup } from "./AccountAndChat";
 import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
 
@@ -1677,18 +1677,18 @@ export default function App() {
             setEditingItem(null);
           }}
         >
-          <PublishForm
-            meta={meta}
-            prefill={prefill}
-            editingItem={editingItem}
-            onDone={() => {
+          {(editingItem || prefill ? <PublishForm meta={meta} prefill={prefill} editingItem={editingItem} onDone={() => {
               setModal(null);
               setEditingItem(null);
               setToast(editingItem ? "商品信息已更新" : "好物发布成功，已为有需要的同学进行匹配");
               refresh();
               navigate("mine");
-            }}
-          />
+            }} /> : <PublishWorkspace meta={meta} onDraftPublished={refresh} onDone={() => {
+              setModal(null);
+              setToast("好物发布成功，已为有需要的同学进行匹配");
+              refresh();
+              navigate("mine");
+            }} />)}
         </Modal>
       )}
       {modal === "wanted" && (

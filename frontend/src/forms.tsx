@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from "react";
-import { ArrowRight, Check, ImagePlus, Sparkles, X } from "lucide-react";
-import { api, type Meta, type Parsed, type ParsedItem, type Item, type Wanted } from "./api";
+import { useEffect, useState, type FormEvent } from "react";
+import { ArrowLeft, ArrowRight, Check, ImagePlus, Sparkles, Trash2, X } from "lucide-react";
+import { api, type Meta, type Parsed, type ParsedItem, type Item, type ItemDraft, type Wanted } from "./api";
 
 type Common = { meta: Meta; onDone: () => void };
 
@@ -194,25 +194,166 @@ export function IntentForm({
   );
 }
 
+export function PublishWorkspace({ meta, onDone, onDraftPublished }: Common & { onDraftPublished?: () => void }) {
+  const [tab, setTab] = useState<"single" | "batch" | "drafts">("single");
+  const [source, setSource] = useState("");
+  const [drafts, setDrafts] = useState<ItemDraft[]>([]);
+  const [activeDraft, setActiveDraft] = useState<ItemDraft | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const lines = source.split(/\r\n|\r|\n/).map((line) => line.trim()).filter(Boolean);
+
+  useEffect(() => {
+    let alive = true;
+    api<ItemDraft[]>("/item-drafts/")
+      .then((rows) => { if (alive) setDrafts(rows); })
+      .catch((e) => { if (alive) setError((e as Error).message); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+
+  async function importLines() {
+    if (!lines.length || lines.length > 10) {
+      setError("每次可导入 1–10 件商品，每行一件");
+      return;
+    }
+    if (lines.some((line) => line.length < 5 || line.length > 3000)) {
+      setError("每件商品的描述需要 5–3000 字");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const imported = await api<ItemDraft[]>("/item-drafts/import", "POST", { text: source });
+      setDrafts((existing) => [...imported, ...existing]);
+      setSource("");
+      setNotice(`已导入 ${imported.length} 件待发布商品。请逐件核对并上传照片。`);
+      setTab("drafts");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeDraft(draft: ItemDraft) {
+    if (!window.confirm(`删除待发布商品「${draft.title || draft.raw.slice(0, 20)}」？`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api(`/item-drafts/${draft.id}`, "DELETE");
+      setDrafts((existing) => existing.filter((item) => item.id !== draft.id));
+      setNotice("待发布商品已删除");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (activeDraft) return <PublishForm key={activeDraft.id} meta={meta} draft={activeDraft} onDone={() => {
+    setDrafts((existing) => existing.filter((item) => item.id !== activeDraft.id));
+    setActiveDraft(null);
+    setNotice("商品已发布，可以继续处理其他待发布商品");
+    onDraftPublished?.();
+  }}
+    onBack={() => setActiveDraft(null)} onDraftSaved={(saved) => {
+      setDrafts((existing) => existing.map((item) => item.id === saved.id ? saved : item));
+      setActiveDraft(null);
+      setNotice("草稿已保存，随时可以继续完善并发布");
+    }} />;
+
+  return <div className="publish-workspace">
+    <div className="publish-tabs" role="tablist" aria-label="发布方式">
+      {([ ["single", "单件发布"], ["batch", "批量导入"], ["drafts", `待发布 ${drafts.length}`] ] as const).map(([key, label]) =>
+        <button key={key} type="button" role="tab" aria-selected={tab === key}
+          className={tab === key ? "active" : ""} onClick={() => { setTab(key); setError(""); }}>
+          {label}
+        </button>)}
+    </div>
+    <div hidden={tab !== "single"}><PublishForm meta={meta} onDone={onDone} /></div>
+    {tab === "batch" && <div className="stack-form">
+      <div className="form-callout"><Sparkles size={22} /><p>一行写一件商品，可一次导入 1–10 件。系统会分别识别标题、价格等信息并保存为私人草稿，不会立即公开。</p></div>
+      <label>每行一件待发布商品
+        <textarea rows={8} maxLength={10000} value={source} onChange={(e) => setSource(e.target.value)}
+          placeholder={"九成新罗技静音鼠标，50 元，万柳面交\n高数教材一本，20 元，燕园面交"} />
+      </label>
+      <p className="hint">已填写 {lines.length} 件。导入后请逐件检查识别结果、上传真实照片，再选择发布。最多保存 50 件待发布商品。</p>
+      <button type="button" className="button primary full" disabled={busy || !lines.length} onClick={() => void importLines()}>
+        {busy ? "正在逐件识别…" : "导入待发布商品"}
+      </button>
+    </div>}
+    {tab === "drafts" && <div className="draft-list">
+      {loading ? <p className="muted">正在加载待发布商品…</p> : drafts.length === 0 ?
+        <div className="draft-empty"><p>还没有待发布商品</p><button type="button" className="button secondary" onClick={() => setTab("batch")}>写一段话批量导入</button></div> :
+        drafts.map((draft) => <article className="draft-card" key={draft.id}>
+          <div className="draft-card-main">
+            <span className="draft-status">待发布</span>
+            <h3>{draft.title || "待补充标题"}</h3>
+            <p>{draft.raw}</p>
+            <small>{draft.price == null ? "待补充价格" : `¥${draft.price}`} · {draft.images.length ? `已上传 ${draft.images.length} 张照片` : "待上传照片"}</small>
+            {draft.clarification && <small>请核对：{draft.clarification}</small>}
+          </div>
+          <div className="draft-card-actions">
+            <button type="button" className="button secondary" onClick={() => setActiveDraft(draft)}>完善并发布</button>
+            <button type="button" className="icon-button" aria-label={`删除 ${draft.title || "待发布商品"}`} disabled={busy} onClick={() => void removeDraft(draft)}><Trash2 size={17} /></button>
+          </div>
+        </article>)}
+    </div>}
+    {notice && <p className="draft-notice" role="status">{notice}</p>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+  </div>;
+}
+
 export function PublishForm({
   meta,
   onDone,
   prefill,
   editingItem,
-}: Common & { prefill?: Wanted | null; editingItem?: Item | null }) {
+  draft,
+  onDraftSaved,
+  onBack,
+}: Common & { prefill?: Wanted | null; editingItem?: Item | null; draft?: ItemDraft | null; onDraftSaved?: (draft: ItemDraft) => void; onBack?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [images, setImages] = useState<string[]>(editingItem?.images || []);
+  const [images, setImages] = useState<string[]>(editingItem?.images || draft?.images || []);
   const [error, setError] = useState("");
-  const [raw, setRaw] = useState("");
+  const [raw, setRaw] = useState(draft?.raw || "");
   const [parsing, setParsing] = useState(false);
-  const [title, setTitle] = useState(editingItem?.title || prefill?.title || "");
-  const [description, setDescription] = useState(editingItem?.description || "");
-  const [category, setCategory] = useState(editingItem?.category || prefill?.category || meta.categories[0]);
-  const [price, setPrice] = useState(editingItem ? String(editingItem.price) : "");
-  const [campus, setCampus] = useState(editingItem?.campus || prefill?.campus || meta.campuses[0]);
-  const [condition, setCondition] = useState(editingItem?.condition_grade || "95新");
-  const [tags, setTags] = useState((editingItem?.tags || []).join("，"));
+  const [title, setTitle] = useState(editingItem?.title || draft?.title || prefill?.title || "");
+  const [description, setDescription] = useState(editingItem?.description || draft?.description || "");
+  const [category, setCategory] = useState(editingItem?.category || (draft ? draft.category || "" : prefill?.category || meta.categories[0]));
+  const [price, setPrice] = useState(editingItem ? String(editingItem.price) : draft?.price != null ? String(draft.price) : "");
+  const [campus, setCampus] = useState(editingItem?.campus || draft?.campus || prefill?.campus || meta.campuses[0]);
+  const [condition, setCondition] = useState(editingItem?.condition_grade || draft?.condition_grade || "95新");
+  const [tags, setTags] = useState((editingItem?.tags || draft?.tags || []).join("，"));
+
+  const payload = () => ({
+    title: title.trim(), description: description.trim(), category,
+    price: price === "" ? null : Number(price), campus,
+    condition_grade: condition, tags: tags.split(/[，,\s]+/).filter(Boolean), images,
+  });
+
+  async function saveDraft() {
+    if (!draft) return;
+    setBusy(true);
+    setError("");
+    try {
+      const values = payload();
+      const saved = await api<ItemDraft>(`/item-drafts/${draft.id}`, "PATCH", {
+        ...values, raw: raw.trim() || draft.raw,
+        title: values.title || null, description: values.description || null,
+        category: values.category || null,
+      });
+      onDraftSaved?.(saved);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function smartFill() {
     if (raw.trim().length < 5) {
@@ -270,20 +411,13 @@ export function PublishForm({
     setBusy(true);
     setError("");
     try {
-      const payload = {
-        title,
-        description,
-        category,
-        price: Number(price),
-        campus,
-        condition_grade: condition,
-        tags: tags.split(/[，,\s]+/).filter(Boolean),
-        images,
-      };
+      const values = payload();
       if (editingItem) {
-        await api<Item>(`/items/${editingItem.id}`, "PATCH", payload);
+        await api<Item>(`/items/${editingItem.id}`, "PATCH", values);
+      } else if (draft) {
+        await api<Item>(`/item-drafts/${draft.id}/publish`, "POST", values);
       } else {
-        await api<Item>("/items/", "POST", payload);
+        await api<Item>("/items/", "POST", values);
       }
       onDone();
     } catch (e) {
@@ -294,6 +428,9 @@ export function PublishForm({
   }
   return (
     <form className="stack-form" onSubmit={submit}>
+      {draft && onBack && <button type="button" className="text-button" onClick={onBack}>
+        <ArrowLeft size={15} /> 返回待发布列表
+      </button>}
       {prefill && (
         <div className="form-callout">
           <p>
@@ -305,7 +442,7 @@ export function PublishForm({
       <div className="form-callout">
         <Sparkles size={22} />
         <p>
-          懒人模式：把要卖的东西用一句话说出来，点“智能识别并填充”，信息会自动填好，你再补充照片即可。
+          {draft ? "这件商品还未公开。请核对识别结果、补充真实照片，再保存草稿或发布。" : "懒人模式：把要卖的东西用一句话说出来，点“智能识别并填充”，信息会自动填好，你再补充照片即可。"}
         </p>
       </div>
       <label>
@@ -313,6 +450,7 @@ export function PublishForm({
         <textarea
           value={raw}
           onChange={(e) => setRaw(e.target.value)}
+          maxLength={3000}
           rows={3}
           placeholder="例如：出一台九成新的罗技静音鼠标，50 元，燕园面交"
         />
@@ -388,9 +526,11 @@ export function PublishForm({
         <label>
           物品分类
           <select
+            required
             value={category}
             onChange={(e) => setCategory(e.target.value)}
           >
+            {draft && <option value="" disabled>请选择商品分类</option>}
             {meta.categories.map((c) => (
               <option key={c}>{c}</option>
             ))}
@@ -448,16 +588,15 @@ export function PublishForm({
           {error}
         </p>
       )}
-      <button className="button primary full" disabled={busy || uploading}>
-        {busy
-          ? editingItem
-            ? "正在保存…"
-            : "正在发布…"
-          : editingItem
-            ? "保存修改"
-            : "发布好物"}
-        <ArrowRight size={17} />
-      </button>
+      <div className="publish-actions">
+        {draft && <button type="button" className="button secondary" disabled={busy || uploading} onClick={() => void saveDraft()}>
+          保存草稿
+        </button>}
+        <button className="button primary" disabled={busy || uploading}>
+          {busy ? "正在处理…" : editingItem ? "保存修改" : "发布好物"}
+          {!busy && <ArrowRight size={17} />}
+        </button>
+      </div>
     </form>
   );
 }

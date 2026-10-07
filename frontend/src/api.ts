@@ -28,6 +28,21 @@ export type Item = {
   is_demo: boolean;
   sale_feedback_count: number;
 };
+export type ItemDraft = {
+  id: string;
+  raw: string;
+  title: string | null;
+  description: string | null;
+  category: string | null;
+  price: number | null;
+  campus: string;
+  condition_grade: string;
+  tags: string[];
+  images: string[];
+  clarification: string | null;
+  created_at: string;
+  updated_at: string;
+};
 export type Meta = {
   categories: string[];
   campuses: string[];

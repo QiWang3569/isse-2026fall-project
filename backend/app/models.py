@@ -122,6 +122,25 @@ class Item(Base):
     __table_args__ = (Index('idx_items_filter', 'status', 'category', 'campus', 'price_cents'),)
 
 
+class ItemDraft(Base):
+    __tablename__ = 'item_drafts'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    seller_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    raw: Mapped[str] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    price_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    campus: Mapped[str] = mapped_column(String(30), default='燕园校本部')
+    condition_grade: Mapped[str] = mapped_column(String(20), default='95新')
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    images: Mapped[list] = mapped_column(JSON, default=list)
+    clarification: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    __table_args__ = (Index('idx_item_drafts_seller', 'seller_id', 'created_at'),)
+
+
 class Intent(Base):
     __tablename__ = 'buyer_intents'
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

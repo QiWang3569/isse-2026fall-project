@@ -2847,3 +2847,28 @@ footer .brand svg {
     max-width: 100%;
   }
 }
+
+/* Publishing workspace: imported lines stay private until reviewed and published. */
+.publish-workspace { display: grid; gap: 20px; }
+.publish-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; padding: 5px; border-radius: 12px; background: #edf3ed; }
+.publish-tabs button { min-height: 40px; padding: 8px; border-radius: 8px; color: #687e6e; font-size: 12px; }
+.publish-tabs button.active { background: #fff; color: var(--deep); font-weight: 700; box-shadow: 0 2px 9px #1b513b14; }
+.publish-actions { display: flex; gap: 10px; }
+.publish-actions .button { flex: 1; }
+.draft-list { display: grid; gap: 12px; }
+.draft-card { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: #fbfcf9; }
+.draft-card-main { min-width: 0; display: grid; gap: 7px; }
+.draft-card-main h3 { font-size: 15px; color: #365541; }
+.draft-card-main p { font-size: 12px; color: #718573; line-height: 1.6; overflow-wrap: anywhere; }
+.draft-card-main small { font-size: 11px; color: #8d9b8b; }
+.draft-status { width: fit-content; padding: 4px 8px; border-radius: 20px; color: #497a5b; background: #e4f2e7; font-size: 10px; }
+.draft-card-actions { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.draft-empty { display: grid; justify-items: center; gap: 14px; padding: 45px 18px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); }
+.draft-notice { padding: 11px 13px; border-radius: 8px; background: #e8f4e9; color: #3d7151; font-size: 12px; }
+.theme-toggle { flex: 0 0 auto; }
+@media (max-width: 650px) {
+  .draft-card { align-items: stretch; flex-direction: column; }
+  .draft-card-actions { justify-content: space-between; }
+  .draft-card-actions .button { flex: 1; }
+  .publish-tabs button { font-size: 11px; }
+}

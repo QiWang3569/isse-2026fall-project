@@ -221,6 +221,27 @@ class ItemParseRequest(StrictModel):
     raw: str = Field(min_length=5, max_length=3000)
 
 
+class ItemDraftImport(StrictModel):
+    text: str = Field(min_length=5, max_length=10000)
+
+
+class ItemDraftUpdate(StrictModel):
+    raw: str | None = Field(default=None, min_length=5, max_length=3000)
+    title: str | None = Field(default=None, min_length=2, max_length=120)
+    description: str | None = Field(default=None, min_length=5, max_length=3000)
+    category: str | None = None
+    price: Decimal | None = Field(default=None, ge=0, le=999999, max_digits=8, decimal_places=2)
+    campus: str | None = None
+    condition_grade: str | None = None
+    tags: list[str] | None = Field(default=None, max_length=8)
+    images: list[str] | None = Field(default=None, max_length=3)
+
+    category_valid = field_validator('category')(classmethod(lambda cls, v: ItemCreate.category_valid(v) if v is not None else None))
+    campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v) if v is not None else None))
+    condition_valid = field_validator('condition_grade')(classmethod(lambda cls, v: ItemCreate.condition_valid(v) if v is not None else None))
+    tags_valid = field_validator('tags')(classmethod(lambda cls, v: ItemCreate.tags_valid(v) if v is not None else None))
+
+
 class ParsedItem(StrictModel):
     title: str | None = Field(default=None, max_length=120)
     description: str | None = Field(default=None, max_length=3000)
