@@ -8,7 +8,7 @@ def test_profile_is_private_editable_and_persistent(client, app):
     original = login(client)
     counts = client.get('/api/v1/users/me/overview')
     assert counts.status_code == 200
-    assert set(counts.json()) == {'intents', 'listings', 'favorites'}
+    assert set(counts.json()) == {'intents', 'listings', 'favorites', 'wanted'}
     assert all(isinstance(value, int) for value in counts.json().values())
 
     changed = client.patch('/api/v1/users/me', json={

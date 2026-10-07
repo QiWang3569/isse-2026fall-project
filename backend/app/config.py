@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -10,9 +11,11 @@ load_dotenv(ROOT / '.env')
 
 @dataclass
 class Settings:
+    app_env: str = field(default_factory=lambda: os.getenv('APP_ENV', 'local'))
     database_url: str = field(default_factory=lambda: os.getenv('DATABASE_URL', f'sqlite:///{ROOT / "data/yandu.db"}'))
     data_dir: Path = field(default_factory=lambda: ROOT / 'data')
     demo_mode: bool = field(default_factory=lambda: os.getenv('DEMO_MODE', 'true').lower() == 'true')
+    session_cookie_secure: bool = field(default_factory=lambda: os.getenv('SESSION_COOKIE_SECURE', 'false').lower() == 'true')
     ai_mode: str = field(default_factory=lambda: os.getenv('AI_MODE', 'local'))
     embedding_mode: str | None = field(default_factory=lambda: os.getenv('EMBEDDING_MODE'))
     model_timeout: float = field(default_factory=lambda: float(os.getenv('MODEL_TIMEOUT_SECONDS', '20')))
@@ -35,6 +38,8 @@ class Settings:
     chat_retention_days: int = field(default_factory=lambda: int(os.getenv('CHAT_RETENTION_DAYS', '180')))
 
     def __post_init__(self):
+        if self.app_env not in {'local', 'production'}:
+            raise ValueError('APP_ENV must be local or production')
         if self.ai_mode not in {'local', 'remote'}:
             raise ValueError('AI_MODE must be local or remote')
         if self.embedding_mode is None:
@@ -53,6 +58,13 @@ class Settings:
             raise ValueError('MATCH_THRESHOLD must be between 0 and 1')
         if not 30 <= self.chat_retention_days <= 3650:
             raise ValueError('CHAT_RETENTION_DAYS must be between 30 and 3650')
+        if self.app_env == 'production':
+            if not self.database_url.startswith('postgresql') or self.demo_mode:
+                raise ValueError('Production requires PostgreSQL and DEMO_MODE=false')
+            if not self.session_cookie_secure or not self.email_auth_ready or not self.smtp_user or not self.smtp_password:
+                raise ValueError('Production requires secure cookies and configured email verification')
+            if len(self.origins) != 1 or urlparse(self.origins[0]).scheme != 'https' or not urlparse(self.origins[0]).hostname:
+                raise ValueError('Production requires one HTTPS origin')
 
     @property
     def email_auth_ready(self):

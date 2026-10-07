@@ -16,15 +16,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import case, create_engine, delete, event, func, or_, select, text, update
+from sqlalchemy import case, create_engine, delete, event, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import ROOT, Settings
+from .database import prepare_database, retire_demo_data
 from .email_auth import code_digest, new_code, normalize_pku_email, send_verification_email
 from .matching import MatchingRunner
-from .migrations import upgrade_buyer_agent
 from .retention import prune_chat
-from .models import ActionLog, Announcement, Base, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
+from .models import ActionLog, Announcement, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
 from .password_auth import DUMMY_HASH, hash_password, new_password_error, verify_password
 from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate, WantedUpdate
 from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, seed
@@ -51,17 +52,12 @@ def create_app(settings: Settings | None = None):
 
     @asynccontextmanager
     async def lifespan(app):
-        if engine.dialect.name == 'postgresql':
-            with engine.begin() as conn:
-                conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
-        Base.metadata.create_all(engine)
-        upgrade_buyer_agent(engine)
-        if engine.dialect.name == 'postgresql':
-            with engine.begin() as conn:
-                conn.execute(text('CREATE INDEX IF NOT EXISTS idx_items_embedding_hnsw ON items USING hnsw (embedding vector_cosine_ops)'))
+        prepare_database(engine)
         if settings.demo_mode:
             with factory() as db:
                 seed(db)
+        else:
+            retire_demo_data(factory)
         await asyncio.to_thread(prune_chat, factory, mutation_lock, settings.chat_retention_days)
         async def retention_loop():
             while True:
@@ -86,6 +82,9 @@ def create_app(settings: Settings | None = None):
     app.state.settings = settings
     app.state.matching = matching
     app.state.mutation_lock = mutation_lock
+    if settings.app_env == 'production':
+        from urllib.parse import urlparse
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=[urlparse(settings.origins[0]).hostname])
     app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=True, allow_methods=['GET', 'POST', 'PATCH', 'DELETE'], allow_headers=['Content-Type'])
 
     @app.middleware('http')
@@ -117,7 +116,9 @@ def create_app(settings: Settings | None = None):
     def current_user(request: Request, db: Session = Depends(get_db)):
         token = request.cookies.get('yandu_session', '')
         session = db.get(LoginSession, hashlib.sha256(token.encode()).hexdigest()) if token else None
-        return db.get(User, session.user_id) if session and session.expires_at > now() else None
+        if not session or session.expires_at <= now() or (not settings.demo_mode and session.user_id.startswith('demo-')):
+            return None
+        return db.get(User, session.user_id)
 
     def require_user(user: User | None = Depends(current_user)):
         if not user:
@@ -131,7 +132,7 @@ def create_app(settings: Settings | None = None):
 
     def get_item(db, item_id):
         item = db.get(Item, item_id)
-        if not item:
+        if not item or (not settings.demo_mode and item.seller_id.startswith('demo-')):
             raise HTTPException(404, '商品不存在')
         return item
 
@@ -149,7 +150,8 @@ def create_app(settings: Settings | None = None):
         token = secrets.token_urlsafe(32)
         db.add(LoginSession(token_hash=hashlib.sha256(token.encode()).hexdigest(), user_id=user.id, expires_at=now()+timedelta(days=1)))
         db.commit()
-        response.set_cookie('yandu_session', token, httponly=True, samesite='strict', secure=request.url.scheme == 'https', max_age=86400)
+        response.set_cookie('yandu_session', token, httponly=True, samesite='strict',
+                            secure=settings.session_cookie_secure or request.url.scheme == 'https', max_age=86400)
         return {'user': own_user_out(user)}
 
     def item_out(item, db, user=None):
@@ -595,6 +597,8 @@ def create_app(settings: Settings | None = None):
               on_sale: bool = Query(True), page: int = Query(1, ge=1), size: int = Query(12, ge=1, le=50),
               db: Session = Depends(get_db), user=Depends(current_user)):
         query = select(Item)
+        if not settings.demo_mode:
+            query = query.where(Item.seller_id.not_like('demo-%'))
         if mine or favorites:
             if not user:
                 raise HTTPException(401, '请先登录')
@@ -977,6 +981,8 @@ def create_app(settings: Settings | None = None):
     @app.get('/api/v1/wanted/')
     def wanted_list(mine: bool = False, db: Session = Depends(get_db), user=Depends(current_user)):
         query = select(Wanted)
+        if not settings.demo_mode:
+            query = query.where(Wanted.buyer_id.not_like('demo-%'))
         if mine:
             if not user:
                 raise HTTPException(401, '请先登录')

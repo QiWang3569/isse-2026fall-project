@@ -66,7 +66,7 @@ def test_hard_filters_budget_campus_condition_and_self_exclusion(client):
     assert not ids.intersection({own['id'], costly['id'], wrong_campus['id'], worn['id'], unrelated['id']})
 
 
-def test_expired_reserved_sold_items_never_match_and_stale_notices_mark_unavailable(client, app):
+def test_expired_reserved_sold_items_do_not_match_until_relisted(client, app):
     login(client)
     with app.state.session_factory() as db:
         db.get(Item, 'sample-1').expires_at = now() - timedelta(seconds=1)
@@ -82,7 +82,9 @@ def test_expired_reserved_sold_items_never_match_and_stale_notices_mark_unavaila
     assert intent(client).json()['matches'] == []
     login(client, 'seller')
     client.patch(f"/api/v1/items/{item['id']}/status", json={'status': 'SOLD'})
-    assert client.patch(f"/api/v1/items/{item['id']}/status", json={'status': 'ACTIVE'}).status_code == 409
+    assert client.patch(f"/api/v1/items/{item['id']}/status", json={'status': 'ACTIVE'}).status_code == 200
+    login(client)
+    assert client.get('/api/v1/notifications/').json()[0]['available']
 
 
 def test_task_limit_pause_resume_and_termination(client):
@@ -203,6 +205,55 @@ def test_production_mode_has_no_demo_login_or_seed(tmp_path):
     with TestClient(create_app(settings)) as c:
         assert c.post('/api/v1/auth/demo', json={'profile': 'admin'}).status_code == 503
         assert c.get('/api/v1/items/').json()['total'] == 0
+
+
+def test_disabling_demo_mode_revokes_old_sessions_and_hides_seeded_data(tmp_path):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    database_url = f'sqlite:///{tmp_path / "switch.db"}'
+    demo = Settings(database_url=database_url, data_dir=tmp_path, demo_mode=True, ai_mode='local')
+    with TestClient(create_app(demo)) as client:
+        login(client, 'admin')
+        old_cookie = client.cookies.get('yandu_session')
+        assert client.get('/api/v1/items/').json()['total'] > 0
+    public = Settings(database_url=database_url, data_dir=tmp_path, demo_mode=False, ai_mode='local')
+    with TestClient(create_app(public)) as client:
+        client.cookies.set('yandu_session', old_cookie)
+        assert client.get('/api/v1/auth/me').json()['user'] is None
+        assert client.post('/api/v1/auth/demo', json={'profile': 'admin'}).status_code == 503
+        assert client.get('/api/v1/items/').json()['total'] == 0
+        assert client.get('/api/v1/items/sample-1').status_code == 404
+        assert client.get('/api/v1/wanted/').json() == []
+        with client.app.state.session_factory() as db:
+            from app.models import LoginSession
+            assert db.query(LoginSession).count() == 0
+
+
+def test_production_settings_reject_unsafe_defaults(tmp_path):
+    with pytest.raises(ValueError, match='PostgreSQL'):
+        Settings(app_env='production', database_url=f'sqlite:///{tmp_path / "unsafe.db"}',
+                 demo_mode=False, ai_mode='local')
+    safe = dict(app_env='production', database_url='postgresql+psycopg://yandu:placeholder@postgres/yandu',
+                demo_mode=False, session_cookie_secure=True, ai_mode='local',
+                auth_secret='x' * 32, smtp_host='smtp.example.org', smtp_user='sender@example.org',
+                smtp_password='placeholder', smtp_from='sender@example.org',
+                origins=['https://market.example.org'])
+    assert Settings(**safe).app_env == 'production'
+    with pytest.raises(ValueError, match='HTTPS origin'):
+        Settings(**{**safe, 'origins': ['http://market.example.org']})
+    with pytest.raises(ValueError, match='DEMO_MODE=false'):
+        Settings(**{**safe, 'demo_mode': True})
+
+
+def test_secure_cookie_can_be_forced_behind_reverse_proxy(tmp_path):
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    settings = Settings(database_url=f'sqlite:///{tmp_path / "cookie.db"}', data_dir=tmp_path,
+                        demo_mode=True, session_cookie_secure=True, ai_mode='local')
+    with TestClient(create_app(settings)) as client:
+        response = client.post('/api/v1/auth/demo', json={'profile': 'buyer'})
+        assert response.status_code == 200
+        assert 'secure' in response.headers['set-cookie'].lower()
 
 
 def test_remote_mode_requires_explicit_credentials():
