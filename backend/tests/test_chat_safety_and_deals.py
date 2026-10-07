@@ -155,6 +155,8 @@ def test_verified_user_can_be_granted_and_revoked_admin_role(client, app):
     login(client, 'buyer')
     assert client.get('/api/v1/admin/chat-reports').status_code == 200
     assert set_admin_role(url, 'moderator@pku.edu.cn', 'student')
+    assert client.get('/api/v1/admin/chat-reports').status_code == 401
+    login(client, 'buyer')
     assert client.get('/api/v1/admin/chat-reports').status_code == 403
     try:
         set_admin_role(url, 'missing@pku.edu.cn', 'admin')

@@ -29,9 +29,10 @@ def verify(archive: Path, compose_file: Path):
                 '-U', user, '-d', temporary_db, input_file=stream)
         result = run(compose_file, 'psql', '-U', user, '-d', temporary_db, '-At', '-c',
                      "SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM items), "
+                     "(SELECT count(*) FROM users WHERE role = 'admin' AND id NOT LIKE 'demo-%'), "
                      "(SELECT extversion FROM pg_extension WHERE extname = 'vector')")
-        users, items, vector_version = result.split('|')
-        print(f'Restore verified: users={users}, items={items}, pgvector={vector_version}')
+        users, items, real_admins, vector_version = result.split('|')
+        print(f'Restore verified: users={users}, items={items}, real_admins={real_admins}, pgvector={vector_version}')
     finally:
         if created:
             run(compose_file, 'dropdb', '-U', user, '--if-exists', '--force', temporary_db)

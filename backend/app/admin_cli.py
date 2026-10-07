@@ -1,12 +1,12 @@
 """Grant or revoke an already verified user's moderator role from the server shell."""
 import argparse
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, delete, select
 from sqlalchemy.orm import Session
 
 from .config import Settings
 from .email_auth import normalize_pku_email
-from .models import ActionLog, User
+from .models import ActionLog, LoginSession, User
 
 
 def set_admin_role(database_url: str, email: str, role: str) -> bool:
@@ -22,6 +22,7 @@ def set_admin_role(database_url: str, email: str, role: str) -> bool:
             if user.role == role:
                 return False
             user.role = role
+            db.execute(delete(LoginSession).where(LoginSession.user_id == user.id))
             db.add(ActionLog(actor_id=user.id, action='role.set.local_cli', target_id=user.id,
                              detail=f'服务器本机管理员命令设置为 {role}'))
             db.commit()
