@@ -94,9 +94,9 @@ cd ..
 
 演示登录不是校园认证，不应直接作为公开服务的登录方案。设置 `DEMO_MODE=false` 后不生成演示数据，并关闭演示登录。邮箱验证码注册、登录及密码设置需要配置邮件服务；已有密码的账号可在邮件服务暂不可用时继续登录。配置和使用步骤见 [邮箱登录与聊天说明](docs/EMAIL_AND_CHAT.md)。发布、收藏、任务、聊天、举报等操作绑定服务器会话，不接受客户端伪造用户 ID。
 
-数据库在 `data/yandu.db`，图片在 `data/uploads`，重启不会丢失。`.env`、数据库、图片、日志和依赖目录已加入 Git 忽略规则。
+未设置 `DATABASE_URL` 时，默认数据库在 `data/yandu.db`；本机 PostgreSQL 的配置与数据迁移见下文。图片在 `data/uploads`，重启不会丢失。`.env`、数据库、图片、日志和依赖目录已加入 Git 忽略规则。
 
-## 可选：模型与 PostgreSQL
+## 模型与 PostgreSQL
 
 复制 `.env.example` 为 `.env`。聊天模型与向量接口已独立配置：
 
@@ -110,21 +110,11 @@ cd ..
 
 **七牛云千问 Flash 已通过本机真实解析与品类精筛测试**，具体配置见 [买家助手说明](docs/BUYER_AGENT.md)。异常重试和状态复核另由模拟接口测试覆盖；其他供应商和完整语义质量尚未验证。向量模式下，旧数据不混用不同模型的向量；切换模式或模型需回填对应向量或使用新开发数据库，默认演示种子没有远程向量。单聊天密钥模式不需要向量回填。
 
-启动会对旧 SQLite/PostgreSQL 表进行增量加列并新建匹配任务表，保留商品、代蹲和已有通知。后台任务目前采用进程内单 worker，**请以单个服务进程启动，不要添加 `--workers`**。PostgreSQL 路径仍未连接真实实例验证。
+启动会对旧 SQLite/PostgreSQL 表进行增量加列并新建匹配任务表，保留商品、代蹲和已有通知。后台任务目前采用进程内单 worker，**请以单个服务进程启动，不要添加 `--workers`**。
 
-可选本地 PostgreSQL：
+本机 PostgreSQL 16 + pgvector 已完成真实容器、现有 SQLite 数据导入、向量 SQL 查询和接口启动验证。新装项目仍可不配置数据库直接使用 SQLite；要切换现有数据，请按 [PostgreSQL 接入与迁移步骤](docs/POSTGRESQL.md) 操作。数据库连接密码仅写在被 Git 忽略的 `.env` 中，不要使用公开示例密码。模型向量召回还需另配兼容的 embedding 服务；只安装 pgvector 不会自动生成向量。
 
-```powershell
-docker compose up -d postgres
-```
-
-在 `.env` 中设置后重启：
-
-```dotenv
-DATABASE_URL=postgresql+psycopg://yandu:yandu-local-only@localhost:5432/yandu
-```
-
-服务创建初始表结构、`vector` 扩展及 HNSW 索引。SQLite 与 PostgreSQL 共用 SQLAlchemy 模型，金额保存为整数分，向量分别采用 JSON 与 `vector(1536)`。切换数据库不会迁移已有数据；后续结构升级还需加入版本化迁移。PostgreSQL 配置路径尚未连接真实实例验证。
+面向真实用户的部署配置、HTTPS、备份和上线检查见 [公开部署说明](docs/DEPLOYMENT.md)。本地演示启动方式不会自动将网站发布到互联网。
 
 ## 检查
 
