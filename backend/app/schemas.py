@@ -82,6 +82,13 @@ class IntentCreate(QueryIn):
     parsed: ParsedIntent
 
 
+class SmartSearchIn(StrictModel):
+    query: str = Field(min_length=2, max_length=500)
+    page: int = Field(default=1, ge=1)
+    size: int = Field(default=12, ge=1, le=50)
+    sort: Literal['recommended', 'newest', 'price_asc', 'price_desc'] = 'recommended'
+
+
 class StatusChange(StrictModel):
     status: Literal['ACTIVE', 'RESERVED', 'SOLD']
 

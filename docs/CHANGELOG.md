@@ -1,6 +1,6 @@
 # 修改日志（边改边记录）
 
-> 记录本项目在本地开发调试期间的代码与文档变更，便于回溯。最后更新：2026-10-07。
+> 记录本项目在本地开发调试期间的代码与文档变更，便于回溯。最后更新：2026-10-11。
 > 说明：`software_architecture.html` / `software_architecture_simple.html` 是既有本地文件，不在此次修改范围内。
 
 ## 2026-10-04
@@ -119,6 +119,24 @@
   - `frontend/src/styles.css`：`html/body` 的 `overflow-x:hidden` 改为 `overflow-x:clip`，避免破坏 `position:sticky`，让顶部白条固定不随滚动消失。
   - `frontend/src/styles.css` / `App.tsx`：窄屏底部导航条隐藏横向滚动条并支持拖拽左右移动。
 - 文档整理：把测试清单 C 中尚未改进的问题（C1/C2/C4/C5/C7/C8/C9/C10/C11/C12）移入 `docs/FUTURE_FEATURES.md` 待实现清单。
+
+## 2026-10-11
+
+- 新增自然语言智能搜索：
+  - `backend/app/schemas.py`：新增 `SmartSearchIn` 请求模型。
+  - `backend/app/main.py`：新增 `POST /api/v1/items/smart-search`，复用 `parse_intent` / `parse_local` 把自然语言拆成分类、预算、成色、关键词等条件，再按关键词覆盖率与价格贴近度排序；远程模型不可用时降级为本地解析。
+  - `frontend/src/App.tsx`：顶栏与手机搜索框新增「智能」开关，市场页新增智能搜索理解标签与结果列表。
+  - `frontend/src/styles.css`：新增智能搜索样式。
+- 管理员工作台拆分与公告管理：
+  - `backend/app/main.py`：新增 `GET /api/v1/admin/announcements` 管理员公告列表。
+  - `frontend/src/App.tsx`：审核工作台拆成「公告管理 / 聊天举报 / 商品举报 / 操作记录」四个页签；新增公告发布表单与上线/下线操作。
+  - `frontend/src/api.ts`：新增 `AdminAnnouncement` 类型。
+- 公告未读提醒：
+  - `backend/app/models.py`：新增 `AnnouncementRead` 表，记录每个用户已读公告。
+  - `backend/app/main.py`：新增 `GET /api/v1/announcements/unread` 与 `POST /api/v1/announcements/mark-read`。
+  - `frontend/src/App.tsx`：未读公告计入铃铛红点，打开铃铛或「系统公告」时自动标记已读；未读数 10 秒轮询。
+- 公告正文保留换行并放大字号：`frontend/src/styles.css` 给公告与铃铛通知正文加 `white-space: pre-line`，并调大公告/铃铛字号。
+- 演示种子新增「燕渡」上线通知：`backend/app/services.py`。
 
 ## 当前改动文件清单
 

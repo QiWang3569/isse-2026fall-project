@@ -200,6 +200,13 @@ class Announcement(Base):
     __table_args__ = (Index('idx_announcements_active', 'active', 'created_at'),)
 
 
+class AnnouncementRead(Base):
+    __tablename__ = 'announcement_reads'
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id'), primary_key=True)
+    announcement_id: Mapped[str] = mapped_column(ForeignKey('announcements.id'), primary_key=True)
+    read_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 class MatchJob(Base):
     __tablename__ = 'match_jobs'
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

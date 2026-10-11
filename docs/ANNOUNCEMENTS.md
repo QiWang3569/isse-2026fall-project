@@ -1,6 +1,6 @@
 # 发布公告与更新说明
 
-> 说明：如何给「燕渡」发布系统公告和更新通知。公告会出现在左侧「系统公告」入口和小铃铛的「公告与更新」分区里。
+> 说明：如何给「燕渡」发布系统公告和更新通知。公告会出现在左侧「系统公告」入口和小铃铛的「公告与更新」分区里。管理员也可以直接登录后在「审核工作台 → 公告管理」页签用表单发布与下线，无需使用下面的 curl。
 
 ## 数据字段
 
@@ -40,7 +40,13 @@ curl -b cookies.txt -X POST http://127.0.0.1:8000/api/v1/admin/announcements \
 
 ### 4. 编辑或下线一条公告
 
-先通过 `GET /api/v1/announcements` 拿到公告 `id`，然后：
+先通过管理员列表接口拿到公告 `id`（包含已下线公告）：
+
+```bash
+curl -b cookies.txt http://127.0.0.1:8000/api/v1/admin/announcements
+```
+
+然后：
 
 ```bash
 curl -b cookies.txt -X PATCH http://127.0.0.1:8000/api/v1/admin/announcements/<公告id> \

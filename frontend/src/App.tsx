@@ -52,7 +52,10 @@ import {
   type Item,
   type Meta,
   type Intent,
+  type Parsed,
+  type SmartSearchResult,
   type Notice,
+  type AdminAnnouncement,
   type SaleFeedbackNotice,
   type Announcement,
   type Wanted,
@@ -83,7 +86,7 @@ const nav = [
   { key: "intents", label: "我的代蹲", icon: Sparkles },
   { key: "profile", label: "我的主页", icon: UserRound },
 ];
-type View = "market" | "profile" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "mywanted" | "admin";
+type View = "market" | "profile" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "mywanted" | "admin" | "admin-chat" | "admin-reports" | "admin-logs";
 type ModalName =
   | "login"
   | "intent"
@@ -104,6 +107,9 @@ const validViews = [
   "mine",
   "mywanted",
   "admin",
+  "admin-chat",
+  "admin-reports",
+  "admin-logs",
 ];
 function currentView(): View {
   const v = location.hash.slice(1);
@@ -202,6 +208,13 @@ export default function App() {
   const [reporting, setReporting] = useState(false),
     [reportText, setReportText] = useState("");
   const [searchRequest, setSearchRequest] = useState(0);
+  const [smartMode, setSmartMode] = useState(false);
+  const [smartQuery, setSmartQuery] = useState("");
+  const [smartPage, setSmartPage] = useState(1);
+  const [smartResult, setSmartResult] = useState<SmartSearchResult | null>(null);
+  const [smartBusy, setSmartBusy] = useState(false);
+  const [smartError, setSmartError] = useState("");
+  const [smartRequest, setSmartRequest] = useState(0);
   const marketRef = useRef<HTMLElement>(null);
   const avatarMenuRef = useRef<HTMLDivElement>(null);
   const reportRef = useRef<HTMLTextAreaElement>(null);
@@ -268,6 +281,31 @@ export default function App() {
     marketRef.current?.scrollIntoView({ block: "start" });
     marketRef.current?.focus({ preventScroll: true });
   }, [searchRequest, view]);
+  useEffect(() => {
+    if (!smartMode || !smartQuery.trim() || view !== "market") return;
+    let alive = true;
+    setSmartBusy(true);
+    setSmartError("");
+    setSmartResult(null);
+    api<SmartSearchResult>("/items/smart-search", "POST", {
+      query: smartQuery,
+      page: smartPage,
+      size: 12,
+      sort,
+    })
+      .then((d) => {
+        if (alive) setSmartResult(d);
+      })
+      .catch((e) => {
+        if (alive) setSmartError(e.message);
+      })
+      .finally(() => {
+        if (alive) setSmartBusy(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [smartQuery, smartPage, sort, smartMode, view, smartRequest]);
   useEffect(() => {
     const target = reporting ? reportRef.current : null;
     target?.scrollIntoView({ block: "center" });
@@ -354,6 +392,12 @@ export default function App() {
     }
     return true;
   };
+  function markAnnouncementsRead() {
+    if (!user) return;
+    void api("/announcements/mark-read", "POST")
+      .then(() => refresh())
+      .catch(() => { /* Keep the unread badge until the next poll. */ });
+  }
   function signedIn(account: User) {
     setUser(account);
     setCompare([]);
@@ -428,8 +472,18 @@ export default function App() {
   }
   function searchSubmit(e: FormEvent) {
     e.preventDefault();
-    setQuery(search);
-    setPage(1);
+    if (smartMode && search.trim()) {
+      setQuery("");
+      setSmartQuery(search.trim());
+      setSmartPage(1);
+      setSmartResult(null);
+      setSmartError("");
+    } else {
+      setQuery(search);
+      setSmartQuery("");
+      setSmartResult(null);
+      setPage(1);
+    }
     navigate("market");
     setSearchRequest((value) => value + 1);
   }
@@ -479,14 +533,19 @@ export default function App() {
   const announcements = useResource<Announcement[]>(
     "/announcements", revision, true,
   );
+  const announcementUnread = useResource<{ count: number }>(
+    "/announcements/unread", revision, !!user, true,
+  );
   const visibleNotices = noticeIntent
     ? (taskNotices.data ?? []).filter((n) => n.intent_id === noticeIntent.id)
     : notices;
   const unread = notices.filter((n) => !n.is_read).length;
   const chatUnread = (conversations.data ?? []).reduce((sum, c) => sum + c.unread_count, 0);
   const feedbackUnread = (saleFeedbackMine.data ?? []).length;
-  const allUnread = unread + chatUnread + feedbackUnread;
+  const announcementUnreadCount = announcementUnread.data?.count ?? 0;
+  const allUnread = unread + chatUnread + feedbackUnread + announcementUnreadCount;
   const personalView = ["profile", "intents", "messages", "favorites", "mine", "mywanted"].includes(view);
+  const adminView = ["admin", "admin-chat", "admin-reports", "admin-logs"].includes(view);
 
   if (!meta)
     return (
@@ -635,14 +694,17 @@ export default function App() {
           ))}
           <button
             className={`nav-item ${modal === "announcements" ? "active" : ""}`}
-            onClick={() => setModal("announcements")}
+            onClick={() => {
+              setModal("announcements");
+              markAnnouncementsRead();
+            }}
           >
             <Megaphone size={20} strokeWidth={1.7} />
             <span>系统公告</span>
           </button>
           {user?.role === "admin" && (
             <button
-              className={`nav-item ${view === "admin" ? "active" : ""}`}
+              className={`nav-item ${adminView ? "active" : ""}`}
               onClick={() => navigate("admin")}
             >
               <ShieldCheck size={20} />
@@ -674,9 +736,29 @@ export default function App() {
               aria-label="搜索校园好物"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜搜你需要的校园好物…"
+              placeholder={
+                smartMode
+                  ? "说人话就能搜：如“2000左右能记笔记的平板”"
+                  : "搜搜你需要的校园好物…"
+              }
             />
             <kbd>Enter</kbd>
+            <button
+              className={`smart-toggle ${smartMode ? "active" : ""}`}
+              type="button"
+              aria-pressed={smartMode}
+              title={smartMode ? "关闭智能搜索" : "开启智能搜索"}
+              onClick={() => {
+                setSmartMode(!smartMode);
+                if (smartMode) {
+                  setSmartQuery("");
+                  setSmartResult(null);
+                }
+              }}
+            >
+              <Sparkles size={16} />
+              <span>智能</span>
+            </button>
           </form>
           <div className="top-actions">
             <button className="icon-button theme-toggle" type="button"
@@ -711,6 +793,7 @@ export default function App() {
                 if (needUser()) {
                   setNoticeIntent(null);
                   setModal("notifications");
+                  markAnnouncementsRead();
                 }
               }}
             >
@@ -759,6 +842,7 @@ export default function App() {
         </header>
         <main>
           {personalView && user && <ProfileNav view={view as PersonalView} onNavigate={navigate} unread={chatUnread} />}
+          {adminView && user && <AdminNav view={view as AdminView} onNavigate={navigate} />}
           {view === "profile" && (user ? <ProfileHome
             user={user} meta={meta} overview={profileOverview.data}
             unread={chatUnread} conversations={conversations.data?.length ?? 0}
@@ -776,8 +860,28 @@ export default function App() {
                 aria-label="手机端搜索校园好物"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="搜索物品、教材或型号…"
+                placeholder={
+                  smartMode
+                    ? "说人话就能搜，例如：没划痕的线代"
+                    : "搜索物品、教材或型号…"
+                }
               />
+              <button
+                className={`smart-toggle ${smartMode ? "active" : ""}`}
+                type="button"
+                aria-pressed={smartMode}
+                title={smartMode ? "关闭智能搜索" : "开启智能搜索"}
+                onClick={() => {
+                  setSmartMode(!smartMode);
+                  if (smartMode) {
+                    setSmartQuery("");
+                    setSmartResult(null);
+                  }
+                }}
+              >
+                <Sparkles size={15} />
+                智能
+              </button>
               <button type="submit" className="text-button">
                 搜索
               </button>
@@ -909,12 +1013,21 @@ export default function App() {
                 <div className="section-heading">
                   <div>
                     <h2>
-                      发现校园好物 <span className="small-dot" />
+                      {smartMode && smartQuery
+                        ? "智能搜索"
+                        : "发现校园好物"}{" "}
+                      <span className="small-dot" />
                     </h2>
-                    <p>值得拥有的，不一定是全新的。</p>
+                    <p>
+                      {smartMode && smartQuery
+                        ? "说人话，也能搜得懂。"
+                        : "值得拥有的，不一定是全新的。"}
+                    </p>
                   </div>
                   <span className="listing-count">
-                    {items.data?.total ?? "…"} 件好物 · 等待新主人
+                    {smartMode && smartQuery
+                      ? `${smartResult?.total ?? "…"} 件结果`
+                      : `${items.data?.total ?? "…"} 件好物 · 等待新主人`}
                   </span>
                 </div>
               ) : (
@@ -946,17 +1059,160 @@ export default function App() {
                   )}
                 </Intro>
               )}
-              <div
-                className="category-tabs"
-                role="group"
-                aria-label="物品分类"
-                ref={categoryTabsRef}
-                onPointerDown={categoryDown}
-                onPointerMove={categoryMove}
-                onPointerUp={categoryUp}
-                onPointerCancel={categoryUp}
-                onClickCapture={categoryClickCapture}
-              >
+              {smartMode && smartQuery ? (
+                <div className="smart-search-results">
+                  <div className="smart-understanding">
+                    <div className="smart-understanding-head">
+                      <Sparkles size={17} />
+                      <span>已理解你的意思</span>
+                      <button
+                        className="query-tag"
+                        onClick={() => {
+                          setSmartQuery("");
+                          setSmartResult(null);
+                          setSmartMode(false);
+                        }}
+                      >
+                        “{smartQuery}”<X size={13} />
+                      </button>
+                    </div>
+                    {smartBusy ? (
+                      <p className="muted">正在理解并搜索…</p>
+                    ) : smartResult ? (
+                      <>
+                        <div className="pills smart-pills">
+                          {smartResult.parsed.category && (
+                            <span>分类：{smartResult.parsed.category}</span>
+                          )}
+                          {smartResult.parsed.max_price !== null && (
+                            <span>
+                              {smartResult.parsed.around_price
+                                ? "预算约"
+                                : "预算"}
+                              ：¥{money(smartResult.parsed.max_price)}
+                              {smartResult.parsed.around_price ? "左右" : "以内"}
+                            </span>
+                          )}
+                          {smartResult.parsed.campus &&
+                            smartResult.parsed.campus !== "不限校区" && (
+                              <span>校区：{smartResult.parsed.campus}</span>
+                            )}
+                          {smartResult.parsed.condition_grade && (
+                            <span>
+                              成色：{smartResult.parsed.condition_grade}以上
+                            </span>
+                          )}
+                          {smartResult.parsed.keywords.map((k) => (
+                            <span key={k}>{k}</span>
+                          ))}
+                          {smartResult.parsed.excluded_keywords.map((k) => (
+                            <span key={k} className="excluded">
+                              不要：{k}
+                            </span>
+                          ))}
+                          {smartResult.parsed.preferences.map((k) => (
+                            <span key={k} className="preference">
+                              偏好：{k}
+                            </span>
+                          ))}
+                        </div>
+                        {smartResult.parsed.clarification && (
+                          <p className="smart-clarification">
+                            {smartResult.parsed.clarification}
+                          </p>
+                        )}
+                      </>
+                    ) : null}
+                  </div>
+                  <div className="smart-results-toolbar">
+                    <span className="listing-count">
+                      {smartResult?.total ?? "…"} 件好物
+                    </span>
+                    <label className="sort-picker smart-sort">
+                      <ArrowDownUp size={14} />
+                      <select
+                        aria-label="智能搜索结果排序"
+                        value={sort}
+                        onChange={(e) => {
+                          setSort(e.target.value);
+                          setSmartPage(1);
+                        }}
+                      >
+                        <option value="recommended">最相关</option>
+                        <option value="newest">最新发布</option>
+                        <option value="price_asc">价格从低到高</option>
+                        <option value="price_desc">价格从高到低</option>
+                      </select>
+                    </label>
+                  </div>
+                  {smartError ? (
+                    <Empty
+                      title="智能搜索暂时不可用"
+                      text={smartError}
+                      action="重试"
+                      onAction={() => setSmartRequest((v) => v + 1)}
+                    />
+                  ) : !smartBusy && smartResult && smartResult.items.length ? (
+                    <>
+                      <div className="item-grid">
+                        {smartResult.items.map((item) => (
+                          <Card
+                            key={item.id}
+                            item={item}
+                            onOpen={openItem}
+                            onFavorite={favorite}
+                            onCompare={addCompare}
+                            selected={compare.some((i) => i.id === item.id)}
+                          />
+                        ))}
+                      </div>
+                      {smartResult.total > 12 && (
+                        <div className="pagination">
+                          <button
+                            className="button secondary"
+                            disabled={smartResult.page <= 1}
+                            onClick={() => setSmartPage(smartResult.page - 1)}
+                          >
+                            <ChevronLeft size={16} />
+                            上一页
+                          </button>
+                          <span>
+                            {smartResult.page} /{" "}
+                            {Math.ceil(smartResult.total / 12)}
+                          </span>
+                          <button
+                            className="button secondary"
+                            disabled={smartResult.page * 12 >= smartResult.total}
+                            onClick={() => setSmartPage(smartResult.page + 1)}
+                          >
+                            下一页
+                            <ChevronRight size={16} />
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  ) : !smartBusy && smartResult ? (
+                    <Empty
+                      title="没有找到特别贴合的"
+                      text="换个说法试试，或开启代蹲，让新上架的商品自动匹配你。"
+                      action="发布求购"
+                      onAction={() => openForm("wanted")}
+                    />
+                  ) : null}
+                </div>
+              ) : (
+                <>
+                <div
+                  className="category-tabs"
+                  role="group"
+                  aria-label="物品分类"
+                  ref={categoryTabsRef}
+                  onPointerDown={categoryDown}
+                  onPointerMove={categoryMove}
+                  onPointerUp={categoryUp}
+                  onPointerCancel={categoryUp}
+                  onClickCapture={categoryClickCapture}
+                >
                 {["全部好物", ...meta.categories].map((c, index) => {
                   const Icon = [
                     LayoutGrid,
@@ -1135,6 +1391,8 @@ export default function App() {
                         : navigate("market")
                   }
                 />
+              )}
+                </>
               )}
             </section>
           )}
@@ -1537,12 +1795,13 @@ export default function App() {
             <Empty title="登录后查看站内消息" text="通过北大邮箱验证后，就能和商品发布者沟通。"
               action="登录或注册" onAction={() => setModal("login")} />
           ))}
-          {view === "admin" && (
+          {adminView && (
             <Admin
               user={user}
               revision={revision}
               refresh={refresh}
               notify={setToast}
+              view={view as AdminView}
             />
           )}
           <footer>
@@ -1779,7 +2038,10 @@ export default function App() {
                   ))}
                   <button
                     className="text-button"
-                    onClick={() => setModal("announcements")}
+                    onClick={() => {
+                      setModal("announcements");
+                      markAnnouncementsRead();
+                    }}
                   >
                     查看全部公告
                     <ArrowRight size={14} />
@@ -2170,16 +2432,49 @@ export default function App() {
   );
 }
 
+type AdminView = "admin" | "admin-chat" | "admin-reports" | "admin-logs";
+
+const adminTabs = [
+  { key: "admin", label: "公告管理" },
+  { key: "admin-chat", label: "聊天举报" },
+  { key: "admin-reports", label: "商品举报" },
+  { key: "admin-logs", label: "操作记录" },
+] as const;
+
+function AdminNav({
+  view,
+  onNavigate,
+}: {
+  view: AdminView;
+  onNavigate: (view: AdminView) => void;
+}) {
+  return (
+    <nav className="profile-nav" aria-label="审核工作台导航">
+      {adminTabs.map(({ key, label }) => (
+        <button
+          key={key}
+          className={view === key ? "active" : ""}
+          onClick={() => onNavigate(key)}
+        >
+          {label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
 function Admin({
   user,
   revision,
   refresh,
   notify,
+  view,
 }: {
   user: User | null;
   revision: number;
   refresh: () => void;
   notify: (v: string) => void;
+  view: AdminView;
 }) {
   const reports = useResource<Report[]>(
     "/admin/reports",
@@ -2194,7 +2489,13 @@ function Admin({
   const chatReports = useResource<ChatReport[]>(
     "/admin/chat-reports", revision, user?.role === "admin",
   );
+  const adminAnnouncements = useResource<AdminAnnouncement[]>(
+    "/admin/announcements", revision, user?.role === "admin",
+  );
   const [busy, setBusy] = useState(false);
+  const [annTitle, setAnnTitle] = useState("");
+  const [annKind, setAnnKind] = useState<"公告" | "更新">("公告");
+  const [annBody, setAnnBody] = useState("");
   if (user?.role !== "admin")
     return (
       <Empty
@@ -2235,6 +2536,39 @@ function Admin({
     } catch (cause) { notify((cause as Error).message); }
     finally { setBusy(false); }
   }
+  async function createAnnouncement(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const title = annTitle.trim();
+    const body = annBody.trim();
+    if (title.length < 2 || body.length < 5) {
+      notify("公告标题至少 2 字，内容至少 5 字");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api("/admin/announcements", "POST", { title, body, kind: annKind });
+      notify("公告已发布");
+      setAnnTitle("");
+      setAnnBody("");
+      refresh();
+    } catch (cause) {
+      notify((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function toggleAnnouncement(a: AdminAnnouncement) {
+    setBusy(true);
+    try {
+      await api(`/admin/announcements/${a.id}`, "PATCH", { active: !a.active });
+      notify(a.active ? "公告已下线" : "公告已上线");
+      refresh();
+    } catch (cause) {
+      notify((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <>
       <Intro
@@ -2246,7 +2580,70 @@ function Admin({
         <ShieldCheck size={18} />
         当前仅提供文字风险词与同名商品检查，不包含图片识别。举报本身不代表违规成立。
       </div>
-      <h2 className="audit-title">聊天消息举报</h2>
+      {view === "admin" && (
+        <>
+          <h2 className="audit-title">公告管理</h2>
+      <form className="stack-form" onSubmit={(e) => void createAnnouncement(e)}>
+        <label>
+          公告标题
+          <input
+            value={annTitle}
+            onChange={(e) => setAnnTitle(e.target.value)}
+            maxLength={200}
+            placeholder="例如：「燕渡」上线通知"
+          />
+        </label>
+        <label>
+          公告类型
+          <select
+            value={annKind}
+            onChange={(e) => setAnnKind(e.target.value as "公告" | "更新")}
+          >
+            <option value="公告">公告</option>
+            <option value="更新">更新</option>
+          </select>
+        </label>
+        <label>
+          公告内容
+          <textarea
+            value={annBody}
+            onChange={(e) => setAnnBody(e.target.value)}
+            rows={7}
+            maxLength={5000}
+            placeholder="输入公告正文，支持换行"
+          />
+        </label>
+        <button className="button primary" disabled={busy}>
+          发布公告
+        </button>
+      </form>
+      {adminAnnouncements.error && (
+        <p className="form-error">{adminAnnouncements.error}</p>
+      )}
+      <div className="audit-list">
+        {adminAnnouncements.data?.map((a) => (
+          <div key={a.id}>
+            <span>{new Date(a.created_at).toLocaleString("zh-CN")}</span>
+            <strong>{a.title}</strong>
+            <code>
+              {a.kind}
+              {a.active ? "" : " · 已下线"}
+            </code>
+            <button
+              className="text-button"
+              disabled={busy}
+              onClick={() => void toggleAnnouncement(a)}
+            >
+              {a.active ? "下线" : "上线"}
+            </button>
+          </div>
+        ))}
+      </div>
+        </>
+      )}
+      {view === "admin-chat" && (
+        <>
+          <h2 className="audit-title">聊天消息举报</h2>
       {chatReports.error && <p className="form-error">{chatReports.error}</p>}
       {chatReports.data?.filter((r) => r.status === "OPEN").map((r) => <article className="review-card" key={r.id}>
         <h3>{r.item_title} · {r.sender.nickname}</h3>
@@ -2258,7 +2655,11 @@ function Admin({
           <button className="button primary" disabled={busy}>确认处理</button>
         </form>
       </article>)}
-      <h2 className="audit-title">商品举报</h2>
+        </>
+      )}
+      {view === "admin-reports" && (
+        <>
+          <h2 className="audit-title">商品举报</h2>
       {reports.loading ? (
         <Busy />
       ) : reports.error ? (
@@ -2323,7 +2724,11 @@ function Admin({
           text="收到新的举报后，相关证据会整理在这里。"
         />
       )}
-      <h2 className="audit-title">最近操作记录</h2>
+        </>
+      )}
+      {view === "admin-logs" && (
+        <>
+          <h2 className="audit-title">最近操作记录</h2>
       {logs.error && <p className="form-error">{logs.error}</p>}
       <div className="audit-list">
         {logs.data?.map((l) => (
@@ -2335,6 +2740,8 @@ function Admin({
           </div>
         ))}
       </div>
+        </>
+      )}
     </>
   );
 }

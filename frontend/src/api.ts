@@ -87,6 +87,14 @@ export type Parsed = {
   preferences: string[];
   condition_grade: string | null;
   clarification: string | null;
+  around_price?: boolean;
+};
+export type SmartSearchResult = {
+  parsed: Parsed;
+  items: Item[];
+  total: number;
+  page: number;
+  size: number;
 };
 export type ParsedItem = {
   title: string | null;
@@ -147,6 +155,9 @@ export type Announcement = {
   body: string;
   kind: "公告" | "更新";
   created_at: string;
+};
+export type AdminAnnouncement = Announcement & {
+  active: boolean;
 };
 export type Wanted = {
   id: string;

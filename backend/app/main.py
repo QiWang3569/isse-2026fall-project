@@ -3,6 +3,7 @@ import hmac
 import io
 import asyncio
 import logging
+import re
 import secrets
 import smtplib
 import threading
@@ -25,14 +26,22 @@ from .database import prepare_database, retire_demo_data
 from .email_auth import code_digest, new_code, normalize_pku_email, send_verification_email
 from .matching import MatchingRunner
 from .retention import prune_chat
-from .models import ActionLog, Announcement, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
+from .models import ActionLog, Announcement, AnnouncementRead, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
 from .password_auth import DUMMY_HASH, hash_password, new_password_error, verify_password
-from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, StatusChange, WantedCreate, WantedUpdate
-from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, seed
+from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, SmartSearchIn, StatusChange, WantedCreate, WantedUpdate
+from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, parse_local, seed
 
 
 def iso(value):
     return value.isoformat() + 'Z'
+
+
+def term_matches(term: str, text: str) -> bool:
+    """Whether a parsed term appears in item text after synonym normalization."""
+    needle = normalize(term).strip()
+    if not needle:
+        return False
+    return needle in normalize(text)
 
 
 def create_app(settings: Settings | None = None):
@@ -219,6 +228,26 @@ def create_app(settings: Settings | None = None):
                           .order_by(Announcement.created_at.desc()).limit(50)).all()
         return [{'id': a.id, 'title': a.title, 'body': a.body, 'kind': a.kind,
                  'created_at': iso(a.created_at)} for a in rows]
+
+    @app.get('/api/v1/announcements/unread')
+    def announcements_unread(db: Session = Depends(get_db), user: User = Depends(require_user)):
+        read = select(AnnouncementRead.announcement_id).where(AnnouncementRead.user_id == user.id)
+        count = db.scalar(select(func.count()).select_from(Announcement)
+                          .where(Announcement.active == True,
+                                 Announcement.id.not_in(read)))
+        return {'count': count or 0}
+
+    @app.post('/api/v1/announcements/mark-read')
+    def announcements_mark_read(db: Session = Depends(get_db), user: User = Depends(require_user)):
+        with mutation_lock:
+            active_ids = db.scalars(select(Announcement.id).where(Announcement.active == True)).all()
+            existing = set(db.scalars(select(AnnouncementRead.announcement_id)
+                                      .where(AnnouncementRead.user_id == user.id)).all())
+            for announcement_id in active_ids:
+                if announcement_id not in existing:
+                    db.add(AnnouncementRead(user_id=user.id, announcement_id=announcement_id))
+            db.commit()
+        return {'ok': True}
 
     @app.get('/api/v1/auth/me')
     def me(user=Depends(current_user)):
@@ -649,6 +678,76 @@ def create_app(settings: Settings | None = None):
         else:
             query = query.order_by(status_rank, Item.created_at.desc())
         return {'items': [item_out(i, db, user) for i in db.scalars(query.offset((page-1)*size).limit(size))], 'total': total, 'page': page, 'size': size}
+
+    @app.post('/api/v1/items/smart-search')
+    def smart_search(data: SmartSearchIn, db: Session = Depends(get_db), user=Depends(current_user)):
+        try:
+            parsed = parse_intent(data.query, settings)
+        except HTTPException:
+            # Keep natural-language search usable even when the model provider is unavailable.
+            parsed = parse_local(data.query)
+
+        around = bool(re.search(r'左右|上下|大约|大概|约|近|差不多', data.query))
+        target_cents = int(parsed.max_price * 100) if parsed.max_price is not None else None
+
+        query = select(Item)
+        if not settings.demo_mode:
+            query = query.where(Item.seller_id.not_like('demo-%'))
+        query = query.where(Item.status == 'ACTIVE', Item.expires_at > now())
+        if parsed.category:
+            query = query.where(Item.category == parsed.category)
+        if parsed.campus and parsed.campus != '不限校区':
+            query = query.where(Item.campus.in_([parsed.campus, '不限校区']))
+        if target_cents is not None:
+            cap = int(target_cents * 1.15) if around else target_cents
+            query = query.where(Item.price_cents <= cap)
+        if parsed.condition_grade:
+            allowed = CONDITIONS[:CONDITIONS.index(parsed.condition_grade) + 1]
+            query = query.where(Item.condition_grade.in_(allowed))
+
+        scored = []
+        for item in db.scalars(query):
+            text = ' '.join([item.title, item.description, *item.tags])
+            if any(term_matches(word, text) for word in parsed.excluded_keywords):
+                continue
+            matched = [word for word in parsed.keywords if term_matches(word, text)]
+            if parsed.keywords and not matched:
+                continue
+            coverage = len(matched) / len(parsed.keywords) if parsed.keywords else 1.0
+            scored.append((item, coverage))
+
+        def sort_key(entry):
+            item, coverage = entry
+            if data.sort == 'price_asc':
+                return (0, item.price_cents, -coverage, -item.created_at.timestamp())
+            if data.sort == 'price_desc':
+                return (0, -item.price_cents, -coverage, -item.created_at.timestamp())
+            if data.sort == 'newest':
+                return (0, -item.created_at.timestamp(), -coverage, 0)
+            closeness = abs(item.price_cents - target_cents) if (around and target_cents is not None) else 0
+            return (-coverage, closeness, -item.created_at.timestamp(), 0)
+
+        scored.sort(key=sort_key)
+        total = len(scored)
+        page_items = scored[(data.page - 1) * data.size: data.page * data.size]
+        parsed_out = {
+            'category': parsed.category,
+            'max_price': float(parsed.max_price) if parsed.max_price is not None else None,
+            'campus': parsed.campus,
+            'keywords': parsed.keywords,
+            'excluded_keywords': parsed.excluded_keywords,
+            'preferences': parsed.preferences,
+            'condition_grade': parsed.condition_grade,
+            'clarification': parsed.clarification,
+            'around_price': around,
+        }
+        return {
+            'parsed': parsed_out,
+            'items': [item_out(item, db, user) for item, _ in page_items],
+            'total': total,
+            'page': data.page,
+            'size': data.size,
+        }
 
     @app.get('/api/v1/items/{item_id}')
     def item_detail(item_id: str, db: Session = Depends(get_db), user=Depends(current_user)):
@@ -1218,6 +1317,12 @@ def create_app(settings: Settings | None = None):
     def admin_logs(db: Session = Depends(get_db), user=Depends(require_admin)):
         return [{'id': l.id, 'action': l.action, 'actor': user_out(db.get(User, l.actor_id)), 'target_id': l.target_id,
                  'detail': l.detail, 'created_at': iso(l.created_at)} for l in db.scalars(select(ActionLog).order_by(ActionLog.created_at.desc()).limit(100))]
+
+    @app.get('/api/v1/admin/announcements')
+    def admin_announcements(db: Session = Depends(get_db), user=Depends(require_admin)):
+        rows = db.scalars(select(Announcement).order_by(Announcement.created_at.desc())).all()
+        return [{'id': a.id, 'title': a.title, 'body': a.body, 'kind': a.kind,
+                 'active': a.active, 'created_at': iso(a.created_at)} for a in rows]
 
     @app.post('/api/v1/admin/announcements', status_code=201)
     def create_announcement(data: AnnouncementCreate, db: Session = Depends(get_db), user=Depends(require_admin)):
