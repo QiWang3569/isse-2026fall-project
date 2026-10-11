@@ -32,6 +32,22 @@ docker compose -f compose.production.yaml up -d
 
 上传图片保存在应用数据卷中；如果旧项目有 `data/uploads` 文件，也要在停机窗口迁移这些文件。本机 SQLite 到 PostgreSQL 的首次迁移步骤见 [PostgreSQL 说明](POSTGRESQL.md)。
 
+## 授予管理员权限
+
+生产环境不使用演示管理员账号。先用真实北大邮箱完成验证码注册并登录一次，然后在服务器项目根目录执行：
+
+```sh
+docker compose -f compose.production.yaml exec app python -m app.admin_cli grant 你的北大邮箱
+```
+
+取消管理员：
+
+```sh
+docker compose -f compose.production.yaml exec app python -m app.admin_cli revoke 你的北大邮箱
+```
+
+说明：被授权的邮箱必须先完成注册，否则命令会提示“该邮箱尚未完成注册”。授权后该用户需要重新登录，权限才会生效。
+
 ## 备份、恢复与回退
 
 `backup` 服务在启动时生成首份 `pg_dump` 自定义格式归档，此后每 24 小时备份一次。备份位于服务器 `data/backups/postgres`，默认保留 14 天；可以通过 `BACKUP_RETENTION_DAYS` 调整。用下面的命令把最新归档恢复到临时数据库并验证用户表、商品表和 pgvector，再自动删除临时库：
