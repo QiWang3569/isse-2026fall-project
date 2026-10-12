@@ -1222,6 +1222,38 @@ main {
   color: #909d83;
   padding: 3px;
 }
+.wanted-search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white;
+  color: var(--muted);
+}
+.wanted-search > svg,
+.wanted-search button {
+  flex-shrink: 0;
+}
+.wanted-search input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #233c32;
+}
+.wanted-search .button {
+  padding: 10px 16px;
+}
+.wanted-search-summary {
+  margin: -6px 0 20px;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
 .wanted-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2900,6 +2932,7 @@ footer .brand svg {
 :root[data-theme="dark"] .sidebar { background: #18271e; border-color: var(--line); }
 :root[data-theme="dark"] .topbar { background: #1b2b22ef; }
 :root[data-theme="dark"] .mobile-search,
+:root[data-theme="dark"] .wanted-search,
 :root[data-theme="dark"] .avatar-menu,
 :root[data-theme="dark"] .modal,
 :root[data-theme="dark"] .chat-layout,

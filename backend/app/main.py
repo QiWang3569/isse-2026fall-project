@@ -1172,7 +1172,8 @@ def create_app(settings: Settings | None = None):
         return {'ok': True}
 
     @app.get('/api/v1/wanted/')
-    def wanted_list(mine: bool = False, db: Session = Depends(get_db), user=Depends(current_user)):
+    def wanted_list(mine: bool = False, q: str = Query('', max_length=100),
+                    db: Session = Depends(get_db), user=Depends(current_user)):
         query = select(Wanted)
         if not settings.demo_mode:
             query = query.where(Wanted.buyer_id.not_like('demo-%'))
@@ -1182,6 +1183,10 @@ def create_app(settings: Settings | None = None):
             query = query.where(Wanted.buyer_id == user.id)
         else:
             query = query.where(Wanted.status == 'ACTIVE', Wanted.expires_at > now())
+        keyword = q.strip().lower()
+        if keyword:
+            query = query.where(or_(func.lower(Wanted.title).contains(keyword, autoescape=True),
+                                    func.lower(Wanted.description).contains(keyword, autoescape=True)))
         rows = db.scalars(query.order_by(Wanted.created_at.desc()).limit(100))
         return [{'id': w.id, 'title': w.title, 'description': w.description, 'category': w.category,
                  'budget': w.budget_cents/100, 'campus': w.campus, 'buyer': user_out(db.get(User, w.buyer_id)),

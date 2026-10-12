@@ -198,6 +198,8 @@ export default function App() {
     [compare, setCompare] = useState<Item[]>([]);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [editingWanted, setEditingWanted] = useState<Wanted | null>(null);
+  const [wantedSearch, setWantedSearch] = useState(""),
+    [wantedQuery, setWantedQuery] = useState("");
   const [notices, setNotices] = useState<Notice[]>([]),
     [prefill, setPrefill] = useState<Wanted | null>(null);
   const [noticeIntent, setNoticeIntent] = useState<Intent | null>(null);
@@ -511,7 +513,11 @@ export default function App() {
     view === "intents" && !!user,
     true,
   );
-  const wanted = useResource<Wanted[]>("/wanted/", revision, view === "wanted");
+  const wanted = useResource<Wanted[]>(
+    "/wanted/?" + new URLSearchParams({ q: wantedQuery }).toString(),
+    revision,
+    view === "wanted",
+  );
   const myWanted = useResource<Wanted[]>("/wanted/?mine=true", revision, view === "mywanted");
   const conversations = useResource<Conversation[]>("/conversations", revision, !!user, true);
   const profileOverview = useResource<{ intents: number; listings: number; favorites: number; wanted: number }>(
@@ -1594,6 +1600,43 @@ export default function App() {
                   发布求购
                 </button>
               </Intro>
+              <form
+                className="wanted-search"
+                role="search"
+                aria-label="搜索求购"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setWantedQuery(wantedSearch.trim());
+                }}
+              >
+                <Search size={18} aria-hidden="true" />
+                <input
+                  type="search"
+                  aria-label="求购关键词"
+                  placeholder="搜索求购标题或描述…"
+                  maxLength={100}
+                  value={wantedSearch}
+                  onChange={(e) => setWantedSearch(e.target.value)}
+                />
+                {(wantedSearch || wantedQuery) && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => {
+                      setWantedSearch("");
+                      setWantedQuery("");
+                    }}
+                  >
+                    清空
+                  </button>
+                )}
+                <button type="submit" className="button primary">搜索</button>
+              </form>
+              {wantedQuery && !wanted.loading && !wanted.error && (
+                <p className="wanted-search-summary" role="status">
+                  “{wantedQuery}”的搜索结果：显示 {wanted.data?.length ?? 0} 条求购
+                </p>
+              )}
               {wanted.loading ? (
                 <Busy />
               ) : wanted.error ? (
@@ -1673,10 +1716,17 @@ export default function App() {
                 </div>
               ) : (
                 <Empty
-                  title="第一个心愿，由你开始"
-                  text="写下想找的物品，让同学们帮你留意。"
-                  action="发布求购"
-                  onAction={() => openForm("wanted")}
+                  title={wantedQuery ? "没有找到匹配的求购" : "第一个心愿，由你开始"}
+                  text={wantedQuery ? "换个关键词试试，或清空搜索查看全部求购。" : "写下想找的物品，让同学们帮你留意。"}
+                  action={wantedQuery ? "清空搜索" : "发布求购"}
+                  onAction={() => {
+                    if (wantedQuery) {
+                      setWantedSearch("");
+                      setWantedQuery("");
+                    } else {
+                      openForm("wanted");
+                    }
+                  }}
                 />
               )}
             </>
