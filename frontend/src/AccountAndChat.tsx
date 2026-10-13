@@ -210,16 +210,18 @@ export function PasswordSetup({ meta, initialEmail = "", onSignedIn }: {
   </form>;
 }
 
-export function ChatCenter({ user, conversations, initialItem, initialDraft, onStarted, refresh }: {
+export function ChatCenter({ user, conversations, initialItem, initialDraft, onStarted, onOpenItem, refresh }: {
   user: User;
   conversations: Conversation[];
   initialItem: Item | null;
   initialDraft: string;
   onStarted: () => void;
+  onOpenItem: (id: string) => void;
   refresh: () => void;
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [recentConversation, setRecentConversation] = useState<Conversation | null>(null);
+  const activeSnapshot = useRef<Conversation | null>(null);
   const [newItem, setNewItem] = useState<Item | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -289,7 +291,10 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
       setRecentConversation(null);
     }
   }, [listedConversation, recentConversation]);
-  const active = recentConversation?.id === activeId ? recentConversation : listedConversation;
+  const active = (recentConversation?.id === activeId ? recentConversation : listedConversation)
+    ?? (activeSnapshot.current?.id === activeId ? activeSnapshot.current : null);
+  // Keep the thread mounted while its list is being refreshed after a message or deal action.
+  if (active) activeSnapshot.current = active;
   async function changeDeal(action: "request" | "reserve" | "decline" | "cancel" | "sold" | "confirm") {
     if (!activeId) return;
     setBusy(true); setError("");
@@ -392,12 +397,18 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
           {(active || newItem) ? <>
             <div className="chat-thread-head">
               <button type="button" className="chat-back" onClick={() => { setActiveId(null); setNewItem(null); onStarted(); }} aria-label="返回会话列表"><ArrowLeft size={18} /></button>
-              <div><strong>{active?.counterpart.nickname ?? newItem?.seller.nickname}</strong>
-                <small>{active?.item_title ?? newItem?.title} · {statusText[active?.item_status ?? newItem?.status ?? ""] ?? "状态未知"}</small></div>
+              <div><strong>{active?.counterpart.nickname ?? newItem?.seller.nickname}</strong></div>
               {active && <button type="button" className="text-button" disabled={busy} onClick={() => void toggleBlock()}>
                 <ShieldOff size={15} />{active.blocked_by_me ? "解除拉黑" : "拉黑"}
               </button>}
             </div>
+            <button type="button" className="chat-item-summary" onClick={() => onOpenItem(active?.item_id ?? newItem!.id)}
+              aria-label={`查看商品：${active?.item_title ?? newItem?.title}`}>
+              <ProductArt item={newItem ?? { title: active!.item_title, images: active!.item_image ? [active!.item_image] : [], art: "" }} />
+              <span><strong>{active?.item_title ?? newItem?.title}</strong>
+                <small>{statusText[active?.item_status ?? newItem?.status ?? ""] ?? "状态未知"} · 查看商品详情</small></span>
+              <ArrowRight size={18} aria-hidden="true" />
+            </button>
             {active && <div className="chat-deal-actions">
               {active.deal_status === "REQUESTED" && <span>买家已提出预订，等待卖家确认</span>}
               {active.deal_status === "RESERVED" && <span>卖家已确认预订，等待交接</span>}
@@ -420,7 +431,6 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
             {active?.blocked && <p className="hint">双方已停止联系。聊天记录仍可查看，不能发送新消息。</p>}
             <div className="chat-history" aria-live="polite">
               {hasMore && <button className="text-button" onClick={() => void loadOlder()}>加载更早的消息</button>}
-              {newItem && <div className="chat-start-item"><ProductArt item={newItem} /><span>{newItem.title}</span><ArrowRight size={16} /></div>}
               {messages.map((message) => <div key={message.id} className={`chat-bubble ${message.sender_id === user.id ? "own" : ""}`}>
                 <p>{message.body}</p><time>{new Date(message.created_at).toLocaleString("zh-CN")}</time>
                 {message.sender_id !== user.id && !message.hidden && <button className="text-button" type="button"

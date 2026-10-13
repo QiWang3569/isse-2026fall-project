@@ -257,11 +257,22 @@ a {
 .chat-thread { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .chat-thread-head { display: flex; align-items: center; gap: 12px; padding: 15px 20px; border-bottom: 1px solid var(--line); }
 .chat-thread-head,
+.chat-item-summary,
 .chat-deal-actions,
 .chat-report-form,
 .chat-compose { flex-shrink: 0; }
 .chat-thread-head div { display: grid; gap: 4px; }
 .chat-thread-head small { color: var(--muted); }
+.chat-item-summary { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 18px; text-align: left; border-bottom: 1px solid var(--line); }
+.chat-item-summary:hover { background: var(--light); }
+.chat-item-summary .product-art, .chat-item-summary .product-photo { width: 64px; height: 48px; border-radius: 7px; flex-shrink: 0; }
+.chat-item-summary .product-placeholder { gap: 2px; font-size: 9px; }
+.chat-item-summary .product-placeholder svg { width: 20px; height: 20px; }
+.chat-item-summary > span { display: grid; gap: 5px; min-width: 0; flex: 1; }
+.chat-item-summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-item-summary small { color: var(--muted); font-size: 11px; }
+.chat-item-summary > svg { flex-shrink: 0; }
+.detail-chat-back { margin-bottom: 14px; }
 .chat-back { display: none; }
 .chat-history { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 20px; }
 .chat-bubble { align-self: flex-start; max-width: min(80%, 480px); padding: 10px 13px; border-radius: 12px 12px 12px 3px; background: #eff3e9; overflow-wrap: anywhere; }
@@ -286,7 +297,7 @@ a {
 
 @media (max-width: 650px) {
   .chat-page { padding: 18px 12px; }
-  .chat-layout { display: block; height: calc(100dvh - 240px); min-height: 440px; }
+  .chat-layout { display: block; height: calc(100dvh - 350px); min-height: 360px; }
   .chat-list { height: 100%; border-right: 0; }
   .chat-thread { height: 100%; }
   .chat-layout.chat-active .chat-list { display: none; }
@@ -1008,6 +1019,8 @@ main {
   aspect-ratio: 360 / 260;
   object-fit: cover;
 }
+.product-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: var(--light); color: var(--muted); font-size: 13px; }
+.search-rule { color: var(--muted); font-size: 12px; margin: 10px 0; }
 .condition-chip {
   position: absolute;
   top: 11px;

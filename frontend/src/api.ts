@@ -27,6 +27,9 @@ export type Item = {
   is_owner: boolean;
   is_demo: boolean;
   sale_feedback_count: number;
+  can_relist?: boolean;
+  can_withdraw?: boolean;
+  can_duplicate?: boolean;
 };
 export type ItemDraft = {
   id: string;
@@ -232,6 +235,7 @@ export const statusText: Record<string, string> = {
   SOLD: "已售出",
   EXPIRED: "已过期",
   BANNED: "审核隐藏",
+  WITHDRAWN: "已撤回",
   PAUSED: "已暂停",
   COMPLETED: "已结束",
 };
