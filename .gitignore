@@ -11,4 +11,6 @@ data/
 *.log
 *.pid
 test-results/
+output/
+.playwright-cli/
 *.tsbuildinfo
