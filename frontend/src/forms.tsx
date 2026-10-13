@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, Check, ImagePlus, Sparkles, Trash2, X } from "lucide-react";
 import { api, type Meta, type Parsed, type ParsedItem, type Item, type ItemDraft, type Wanted } from "./api";
+import { expiryText } from "./api";
+import { ValiditySelect } from "./ValiditySelect";
 
 type Common = { meta: Meta; onDone: () => void };
 
@@ -10,6 +12,7 @@ export function IntentForm({
   onDone,
 }: Common & { initial: string }) {
   const [query, setQuery] = useState(initial);
+  const [validityDays, setValidityDays] = useState(14);
   const [parsed, setParsed] = useState<Parsed | null>(null);
   const [keywords, setKeywords] = useState("");
   const [excluded, setExcluded] = useState("");
@@ -32,6 +35,7 @@ export function IntentForm({
       } else {
         await api("/intents/", "POST", {
           raw_query: query,
+          validity_days: validityDays,
           parsed: {
             ...parsed,
             keywords: keywords.split(/[，,\s]+/).filter(Boolean),
@@ -174,8 +178,9 @@ export function IntentForm({
           </label>
         </div>
       )}
+      <ValiditySelect label="代蹲时长" value={validityDays} onChange={setValidityDays} allowUnlimited={false} />
       <p className="hint">
-        每人最多 5 个活跃任务，默认持续 14 天，可随时暂停或结束。
+        每人最多 5 个活跃任务，可选择 7、14 或 30 天，随时暂停、续期或结束。
         {meta.ai_mode === "local" &&
           "当前演示使用关键词规则解析，请确认筛选条件。"}
         {meta.ai_mode === "remote" &&
@@ -329,11 +334,13 @@ export function PublishForm({
   const [campus, setCampus] = useState(editingItem?.campus || draft?.campus || prefill?.campus || meta.campuses[0]);
   const [condition, setCondition] = useState(editingItem?.condition_grade || draft?.condition_grade || "95新");
   const [tags, setTags] = useState((editingItem?.tags || draft?.tags || []).join("，"));
+  const [validityDays, setValidityDays] = useState(editingItem?.validity_days ?? draft?.validity_days ?? 14);
 
   const payload = () => ({
     title: title.trim(), description: description.trim(), category,
     price: price === "" ? null : Number(price), campus,
     condition_grade: condition, tags: tags.split(/[，,\s]+/).filter(Boolean), images,
+    ...(!editingItem || validityDays !== editingItem.validity_days ? { validity_days: validityDays } : {}),
   });
 
   async function saveDraft() {
@@ -576,9 +583,10 @@ export function PublishForm({
           placeholder="例如：鼠标，静音，无线"
         />
       </label>
-      <p className="hint">
-        商品默认在售 14 天。成交后记得标记“已售出”，让彼此少一点等待。
-      </p>
+      <ValiditySelect value={validityDays} onChange={setValidityDays} />
+      <p className="hint">{editingItem
+        ? `当前${expiryText(editingItem.expires_at)}。修改有效期后从保存时重新计算；只修改内容不会续期。`
+        : "有效期从发布时开始计算。过期后停止公开展示，聊天和交易记录仍会保留。"}</p>
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -605,6 +613,9 @@ export function WantedForm({
 }: Common & { initial: string; editingWanted?: Wanted | null }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [validityDays, setValidityDays] = useState(editingWanted?.validity_days ?? 7);
+  const [enableWatch, setEnableWatch] = useState(false);
+  const [watchValidityDays, setWatchValidityDays] = useState(14);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
@@ -617,6 +628,8 @@ export function WantedForm({
         category: data.get("category"),
         budget: Number(data.get("budget")),
         campus: data.get("campus"),
+        ...(!editingWanted || validityDays !== editingWanted.validity_days ? { validity_days: validityDays } : {}),
+        ...(!editingWanted ? { enable_watch: enableWatch, watch_validity_days: watchValidityDays } : {}),
       };
       if (editingWanted) {
         await api(`/wanted/${editingWanted.id}`, "PATCH", payload);
@@ -688,7 +701,18 @@ export function WantedForm({
           </select>
         </label>
       </div>
-      <p className="hint">求购将展示 7 天，找到后可以提前结束。</p>
+      <ValiditySelect value={validityDays} onChange={setValidityDays} />
+      <p className="hint">{editingWanted
+        ? `当前${expiryText(editingWanted.expires_at)}。修改有效期后从保存时重新计算；只修改内容不会续期。`
+        : "到期后停止展示，找到后也可以提前结束。"}</p>
+      {!editingWanted && <>
+        <label className="check-label"><input type="checkbox" checked={enableWatch} onChange={(event) => setEnableWatch(event.target.checked)} />有匹配商品时提醒我</label>
+        {enableWatch && <>
+          <ValiditySelect label="代蹲时长" value={watchValidityDays} onChange={setWatchValidityDays} allowUnlimited={false} />
+          <p className="hint">使用本次求购的关键词、预算和校区创建代蹲，占用一个活跃任务名额。提醒会显示在站内通知中。</p>
+        </>}
+      </>}
+      {editingWanted?.linked_intent_id && <p className="hint">此求购已关联代蹲。代蹲使用创建时的条件，修改求购不会同步修改代蹲。</p>}
       {error && (
         <p className="form-error" role="alert">
           {error}

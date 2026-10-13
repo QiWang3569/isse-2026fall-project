@@ -8,7 +8,7 @@ import {
   PackageOpen,
   SlidersHorizontal,
 } from "lucide-react";
-import { type Item, ago, campusShort, money, statusText } from "./api";
+import { type Item, ago, campusShort, money, statusText, expiryText } from "./api";
 
 export function Brand({ small = false }: { small?: boolean }) {
   return (
@@ -342,6 +342,7 @@ export function Card({
             {campusShort(item.campus)}
           </span>
           <span>{ago(item.created_at)}</span>
+          {item.is_owner && <span>{expiryText(item.expires_at)}</span>}
         </div>
       </div>
     </article>

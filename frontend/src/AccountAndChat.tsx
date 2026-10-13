@@ -210,11 +210,13 @@ export function PasswordSetup({ meta, initialEmail = "", onSignedIn }: {
   </form>;
 }
 
-export function ChatCenter({ user, conversations, initialItem, initialDraft, onStarted, onOpenItem, refresh }: {
+export function ChatCenter({ user, conversations, initialItem, initialDraft, initialConversationId, onConversationOpened, onStarted, onOpenItem, refresh }: {
   user: User;
   conversations: Conversation[];
   initialItem: Item | null;
   initialDraft: string;
+  initialConversationId?: string | null;
+  onConversationOpened?: () => void;
   onStarted: () => void;
   onOpenItem: (id: string) => void;
   refresh: () => void;
@@ -234,6 +236,30 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
   const bottom = useRef<HTMLDivElement>(null);
   const loadingOlder = useRef(false);
   const handledItem = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialConversationId) return;
+    let alive = true;
+    setActiveId(null);
+    setRecentConversation(null);
+    setNewItem(null);
+    setMessages([]);
+    setError("");
+    void api<Conversation>(`/conversations/${encodeURIComponent(initialConversationId)}`)
+      .then((conversation) => {
+        if (!alive) return;
+        setActiveId(conversation.id);
+        setRecentConversation(conversation);
+        setLoadedOlder(false);
+        setDraft("");
+        onConversationOpened?.();
+      })
+      .catch(() => {
+        if (!alive) return;
+        setError("无法打开该会话，请确认登录了接收提醒的账号后重试。");
+        onConversationOpened?.();
+      });
+    return () => { alive = false; };
+  }, [initialConversationId, user.id, onConversationOpened]);
   useEffect(() => {
     if (!initialItem) { handledItem.current = null; return; }
     if (handledItem.current === initialItem.id) return;
@@ -381,6 +407,7 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
   return (
     <section className="chat-page">
       <div className="chat-heading"><MessageCircle size={22} /><div><h1>站内消息</h1><p>关于商品的沟通会保存在这里，只有买卖双方可见。</p></div></div>
+      {error && !active && !newItem && <p className="form-error" role="alert">{error}</p>}
       <div className={`chat-layout ${activeId || newItem ? "chat-active" : ""}`}>
         <div className="chat-list" aria-label="会话列表">
           {conversations.length ? conversations.map((conversation) => (

@@ -1340,6 +1340,7 @@ main {
 }
 .wanted-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-left: auto;
@@ -2005,6 +2006,13 @@ footer .brand svg {
   flex-direction: row !important;
   align-items: center;
 }
+.check-label input[type="checkbox"] { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--green); }
+.notification-settings { border: 1px solid var(--line); border-radius: 16px; padding: 20px 24px; margin: 20px 0; }
+.notification-settings .check-label { display: flex; gap: 10px; font-weight: 600; font-size: 14px; }
+.notification-settings .hint { margin: 10px 0 0; overflow-wrap: anywhere; }
+.wanted-card > .wanted-expiry { min-height: 0; margin: 10px 0; font-size: 11px; }
+.wanted-watch { margin: 12px 0; }
+.wanted-watch .hint { margin: 0 0 8px; }
 .audit-title {
   font-size: 18px;
   margin: 30px 0 18px;
