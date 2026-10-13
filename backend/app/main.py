@@ -531,6 +531,10 @@ def create_app(settings: Settings | None = None):
                           .order_by(Conversation.last_message_at.desc()).limit(100)).all()
         return [conversation_out(db, row, user) for row in rows]
 
+    @app.get('/api/v1/conversations/{conversation_id}')
+    def conversation_detail(conversation_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        return conversation_out(db, owned_conversation(db, conversation_id, user), user)
+
     @app.post('/api/v1/items/{item_id}/conversations', status_code=201)
     def start_conversation(item_id: str, data: ChatMessageCreate, db: Session = Depends(get_db), user=Depends(require_user)):
         with mutation_lock:

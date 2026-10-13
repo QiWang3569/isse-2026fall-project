@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, inspect, text
 
 from app.config import Settings
 from app.main import create_app
-from app.models import LoginSession, User, now
+from app.models import Conversation, Item, LoginSession, User, now
 from conftest import login
 
 
@@ -42,6 +42,30 @@ def test_new_database_email_preference_server_default_is_false(client, app):
                                 "VALUES ('server-default-user', '默认用户', '万柳学区', 'student', '', '', 'sage')"))
     with app.state.session_factory() as db:
         assert db.get(User, 'server-default-user').email_notifications is False
+
+
+def test_email_link_can_load_older_authorized_conversation_outside_recent_list(client, app):
+    assert client.get('/api/v1/conversations/missing').status_code == 401
+    login(client)
+    result = client.post('/api/v1/items/sample-1/conversations', json={'body': '需要保留的旧会话'})
+    target = result.json()['conversation']['id']
+    with app.state.session_factory() as db:
+        db.get(Conversation, target).last_message_at = now() - timedelta(days=1)
+        db.add_all([Item(id=f'new-chat-item-{index}', seller_id='demo-seller', title='新的商品会话',
+                         category='数码与影音', campus='万柳学区', price_cents=1000) for index in range(100)])
+        db.flush()
+        db.add_all([Conversation(item_id=f'new-chat-item-{index}', buyer_id='demo-buyer',
+                                 seller_id='demo-seller') for index in range(100)])
+        db.commit()
+    recent = client.get('/api/v1/conversations').json()
+    assert len(recent) == 100 and target not in {row['id'] for row in recent}
+    detail = client.get(f'/api/v1/conversations/{target}')
+    assert detail.status_code == 200
+    assert detail.json()['last_message']['body'] == '需要保留的旧会话'
+    login(client, 'admin')
+    assert client.get(f'/api/v1/conversations/{target}').status_code == 404
+    login(client, 'seller')
+    assert client.get(f'/api/v1/conversations/{target}').status_code == 200
 
 
 @pytest.mark.parametrize('url', ['http://example.com', 'https://site.test/path',
