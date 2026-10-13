@@ -1,18 +1,46 @@
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 CATEGORIES = ['课程资料与书籍', '数码与影音', '校园出行与运动', '宿舍生活与家电', '美妆服饰与周边', '人员招募']
 CAMPUSES = ['燕园校本部', '万柳学区', '医学部', '昌平新校区', '不限校区']
 CONDITIONS = ['全新', '95新', '9成新', '8成新', '基本可用']
 
 
+def valid_duration(value):
+    if value not in {0, 7, 14, 30}:
+        raise ValueError('有效期请选择 7、14、30 天或长期有效')
+    return value
+
+
+def watch_duration(value):
+    if value not in {7, 14, 30}:
+        raise ValueError('代蹲有效期请选择 7、14 或 30 天')
+    return value
+
+
+ValidityDays = Annotated[int, Field(strict=True), AfterValidator(valid_duration)]
+WatchValidityDays = Annotated[int, Field(strict=True), AfterValidator(watch_duration)]
+
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
 
 
+class ExpiryUpdate(StrictModel):
+    validity_days: ValidityDays | None = None
+
+    @field_validator('validity_days')
+    @classmethod
+    def duration_not_null(cls, value):
+        if value is None:
+            raise ValueError('有效期不能设为空')
+        return value
+
+
 class ItemCreate(StrictModel):
+    validity_days: ValidityDays = 14
     title: str = Field(min_length=2, max_length=120)
     description: str = Field(min_length=5, max_length=3000)
     category: str
@@ -80,6 +108,7 @@ class ParsedIntent(StrictModel):
 
 class IntentCreate(QueryIn):
     parsed: ParsedIntent
+    validity_days: WatchValidityDays = 14
 
 
 class SmartSearchIn(StrictModel):
@@ -95,9 +124,20 @@ class StatusChange(StrictModel):
 
 class IntentChange(StrictModel):
     action: Literal['pause', 'resume', 'renew']
+    validity_days: WatchValidityDays | None = None
+    duration_not_null = field_validator('validity_days')(classmethod(lambda cls, value: ExpiryUpdate.duration_not_null(value)))
+
+    @model_validator(mode='after')
+    def duration_only_for_renewal(self):
+        if self.validity_days is not None and self.action != 'renew':
+            raise ValueError('请通过续期修改代蹲有效期')
+        return self
 
 
 class WantedCreate(StrictModel):
+    validity_days: ValidityDays = 7
+    enable_watch: bool = Field(default=False, strict=True)
+    watch_validity_days: WatchValidityDays = 14
     title: str = Field(min_length=2, max_length=120)
     description: str = Field(min_length=5, max_length=1000)
     category: str
@@ -107,7 +147,11 @@ class WantedCreate(StrictModel):
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
 
 
-class ItemUpdate(StrictModel):
+class WantedWatchCreate(StrictModel):
+    validity_days: WatchValidityDays = 14
+
+
+class ItemUpdate(ExpiryUpdate):
     title: str | None = Field(default=None, min_length=2, max_length=120)
     description: str | None = Field(default=None, min_length=5, max_length=3000)
     category: str | None = None
@@ -123,7 +167,7 @@ class ItemUpdate(StrictModel):
     tags_valid = field_validator('tags')(classmethod(lambda cls, v: ItemCreate.tags_valid(v) if v is not None else None))
 
 
-class WantedUpdate(StrictModel):
+class WantedUpdate(ExpiryUpdate):
     title: str | None = Field(default=None, min_length=2, max_length=120)
     description: str | None = Field(default=None, min_length=5, max_length=1000)
     category: str | None = None
@@ -174,10 +218,11 @@ class PasswordSet(PasswordLogin):
 
 
 class ProfileUpdate(StrictModel):
-    nickname: str = Field(min_length=2, max_length=50)
-    campus: str
-    bio: str = Field(default='', max_length=160)
-    avatar_color: Literal['sage', 'blue', 'peach', 'lavender'] = 'sage'
+    email_notifications: bool | None = Field(default=None, strict=True)
+    nickname: str | None = Field(default=None, min_length=2, max_length=50)
+    campus: str | None = None
+    bio: str | None = Field(default=None, max_length=160)
+    avatar_color: Literal['sage', 'blue', 'peach', 'lavender'] | None = None
 
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
 
@@ -232,7 +277,7 @@ class ItemDraftImport(StrictModel):
     text: str = Field(min_length=5, max_length=10000)
 
 
-class ItemDraftUpdate(StrictModel):
+class ItemDraftUpdate(ExpiryUpdate):
     raw: str | None = Field(default=None, min_length=5, max_length=3000)
     title: str | None = Field(default=None, min_length=2, max_length=120)
     description: str | None = Field(default=None, min_length=5, max_length=3000)

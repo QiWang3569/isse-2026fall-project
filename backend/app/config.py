@@ -36,6 +36,10 @@ class Settings:
     smtp_password: str = field(default_factory=lambda: os.getenv('SMTP_PASSWORD', ''))
     smtp_from: str = field(default_factory=lambda: os.getenv('SMTP_FROM', ''))
     chat_retention_days: int = field(default_factory=lambda: int(os.getenv('CHAT_RETENTION_DAYS', '180')))
+    chat_email_enabled: bool = field(default_factory=lambda: os.getenv('CHAT_EMAIL_ENABLED', 'false').lower() == 'true')
+    public_app_url: str = field(default_factory=lambda: os.getenv('PUBLIC_APP_URL', '').rstrip('/'))
+    chat_email_delay_seconds: int = field(default_factory=lambda: int(os.getenv('CHAT_EMAIL_DELAY_SECONDS', '300')))
+    chat_email_cooldown_seconds: int = field(default_factory=lambda: int(os.getenv('CHAT_EMAIL_COOLDOWN_SECONDS', '1800')))
 
     def __post_init__(self):
         if self.app_env not in {'local', 'production'}:
@@ -58,6 +62,23 @@ class Settings:
             raise ValueError('MATCH_THRESHOLD must be between 0 and 1')
         if not 30 <= self.chat_retention_days <= 3650:
             raise ValueError('CHAT_RETENTION_DAYS must be between 30 and 3650')
+        if not 60 <= self.chat_email_delay_seconds <= 86400:
+            raise ValueError('CHAT_EMAIL_DELAY_SECONDS must be between 60 and 86400')
+        if not 300 <= self.chat_email_cooldown_seconds <= 604800:
+            raise ValueError('CHAT_EMAIL_COOLDOWN_SECONDS must be between 300 and 604800')
+        if self.public_app_url:
+            public = urlparse(self.public_app_url)
+            port = public.port  # Parsing validates non-numeric and out-of-range ports.
+            valid_scheme = public.scheme == 'https' or (
+                self.app_env == 'local' and public.scheme == 'http'
+                and public.hostname in {'127.0.0.1', 'localhost', '::1'})
+            if (not valid_scheme or not public.hostname or port == 0 or public.username or public.password
+                    or public.query or public.fragment or public.path not in {'', '/'}):
+                raise ValueError('PUBLIC_APP_URL must be an HTTPS site origin (local loopback HTTP is allowed)')
+            if self.app_env == 'production' and self.public_app_url not in self.origins:
+                raise ValueError('PUBLIC_APP_URL must match the production HTTPS origin')
+        if self.chat_email_enabled and not self.chat_email_ready:
+            raise ValueError('Chat email requires PUBLIC_APP_URL and SMTP_HOST/SMTP_FROM')
         if self.app_env == 'production':
             if not self.database_url.startswith('postgresql') or self.demo_mode:
                 raise ValueError('Production requires PostgreSQL and DEMO_MODE=false')
@@ -69,3 +90,7 @@ class Settings:
     @property
     def email_auth_ready(self):
         return len(self.auth_secret) >= 32 and bool(self.smtp_host and self.smtp_from)
+
+    @property
+    def chat_email_ready(self):
+        return self.chat_email_enabled and bool(self.public_app_url and self.smtp_host and self.smtp_from)

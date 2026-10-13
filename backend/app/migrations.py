@@ -5,11 +5,16 @@ from sqlalchemy import inspect, text
 def upgrade_buyer_agent(engine):
     additions = {
         'users': {'email': 'VARCHAR(254)', 'password_hash': 'VARCHAR(255)',
+                  'email_notifications': 'BOOLEAN NOT NULL DEFAULT FALSE',
                   'bio': "VARCHAR(160) NOT NULL DEFAULT ''",
                   'avatar_color': "VARCHAR(20) NOT NULL DEFAULT 'sage'"},
         'buyer_intents': {'excluded_keywords': "JSON NOT NULL DEFAULT '[]'",
                          'preferences': "JSON NOT NULL DEFAULT '[]'",
-                         'completed_item_id': 'VARCHAR(36)'},
+                         'completed_item_id': 'VARCHAR(36)',
+                         'validity_days': 'INTEGER NOT NULL DEFAULT 14'},
+        'items': {'validity_days': 'INTEGER NOT NULL DEFAULT 14'},
+        'item_drafts': {'validity_days': 'INTEGER NOT NULL DEFAULT 14'},
+        'wanted_posts': {'validity_days': 'INTEGER NOT NULL DEFAULT 7'},
         'conversations': {'deal_status': "VARCHAR(20) NOT NULL DEFAULT 'NONE'"},
         'chat_messages': {'hidden_at': 'TIMESTAMP'},
         'match_notifications': {'verdict': "VARCHAR(20) NOT NULL DEFAULT 'MATCH'",

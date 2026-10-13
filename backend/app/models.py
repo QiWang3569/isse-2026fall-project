@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -26,6 +26,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default='student')
     contact: Mapped[str] = mapped_column(String(100), default='')
     email: Mapped[str | None] = mapped_column(String(254), unique=True, nullable=True)
+    email_notifications: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     bio: Mapped[str] = mapped_column(String(160), default='')
     avatar_color: Mapped[str] = mapped_column(String(20), default='sage')
@@ -118,6 +119,7 @@ class Item(Base):
     embedding: Mapped[list | None] = mapped_column(JSON().with_variant(Vector(1536), 'postgresql'), nullable=True)
     embedding_model: Mapped[str] = mapped_column(String(100), default='local-keyword')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    validity_days: Mapped[int] = mapped_column(Integer, default=14, server_default='14')
     expires_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: now() + timedelta(days=14))
     __table_args__ = (Index('idx_items_filter', 'status', 'category', 'campus', 'price_cents'),)
 
@@ -136,6 +138,7 @@ class ItemDraft(Base):
     tags: Mapped[list] = mapped_column(JSON, default=list)
     images: Mapped[list] = mapped_column(JSON, default=list)
     clarification: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validity_days: Mapped[int] = mapped_column(Integer, default=14, server_default='14')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     __table_args__ = (Index('idx_item_drafts_seller', 'seller_id', 'created_at'),)
@@ -158,6 +161,7 @@ class Intent(Base):
     embedding: Mapped[list | None] = mapped_column(JSON().with_variant(Vector(1536), 'postgresql'), nullable=True)
     embedding_model: Mapped[str] = mapped_column(String(100), default='local-keyword')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    validity_days: Mapped[int] = mapped_column(Integer, default=14, server_default='14')
     expires_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: now() + timedelta(days=14))
     __table_args__ = (Index('idx_intents_active', 'status', 'expires_at'),)
 
@@ -238,6 +242,7 @@ class Wanted(Base):
     campus: Mapped[str] = mapped_column(String(30))
     status: Mapped[str] = mapped_column(String(20), default='ACTIVE')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    validity_days: Mapped[int] = mapped_column(Integer, default=7, server_default='7')
     expires_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: now() + timedelta(days=7))
 
 

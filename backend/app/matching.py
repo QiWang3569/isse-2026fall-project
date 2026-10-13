@@ -10,6 +10,7 @@ from datetime import timedelta
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
+from .expiry import is_expired, unexpired
 from .buyer_agent import Assessment, Evidence, ModelUnavailable, review_candidates
 from .models import Intent, Item, MatchJob, Notification, now
 from .schemas import CONDITIONS
@@ -31,7 +32,7 @@ def intent_data(intent):
 
 def eligible(item, intent):
     return (intent.status == 'ACTIVE' and intent.expires_at > now()
-            and item.status == 'ACTIVE' and item.expires_at > now()
+            and item.status == 'ACTIVE' and not is_expired(item)
             and item.seller_id != intent.buyer_id
             and (not intent.category or item.category == intent.category)
             and (intent.max_price_cents is None or item.price_cents <= intent.max_price_cents)
@@ -159,7 +160,7 @@ class MatchingRunner:
             if not intent or intent.status != 'ACTIVE' or intent.expires_at <= now():
                 return []
             spec = intent_data(intent)
-            query = select(Item).where(Item.status == 'ACTIVE', Item.expires_at > now(), Item.seller_id != intent.buyer_id)
+            query = select(Item).where(Item.status == 'ACTIVE', unexpired(Item), Item.seller_id != intent.buyer_id)
             if item_id:
                 query = query.where(Item.id == item_id)
             if intent.category:
