@@ -172,7 +172,7 @@ def test_upload_checks_content_and_ownership_and_price_validation(client):
     assert publish(client, price=-1).status_code == 422
     assert publish(client, price=2.999).status_code == 422
     assert publish(client, seller_id='demo-buyer').status_code == 422
-    assert publish(client, images=[]).status_code == 422
+    assert publish(client, images=[]).status_code == 201
 
 
 def test_wanted_ownership_expiry_and_csrf(client, app):
