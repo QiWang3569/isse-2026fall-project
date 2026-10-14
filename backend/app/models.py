@@ -81,6 +81,13 @@ class ChatMessage(Base):
     __table_args__ = (Index('idx_chat_messages_conversation', 'conversation_id', 'created_at'),)
 
 
+class ChatAttachment(Base):
+    __tablename__ = 'chat_attachments'
+    path: Mapped[str] = mapped_column(ForeignKey('uploads.path', ondelete='CASCADE'), primary_key=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey('chat_messages.id', ondelete='CASCADE'), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class UserBlock(Base):
     __tablename__ = 'user_blocks'
     blocker_id: Mapped[str] = mapped_column(ForeignKey('users.id'), primary_key=True)

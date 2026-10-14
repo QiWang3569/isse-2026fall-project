@@ -16,6 +16,7 @@ from conftest import intent, login, photo, publish
 def my_wanted(client, wanted_id):
     return next(w for w in client.get('/api/v1/wanted/?mine=true').json() if w['id'] == wanted_id)
 
+
 def test_wanted_and_intent_share_edits_matches_and_lifecycle(client):
     login(client)
     created = client.post('/api/v1/wanted/', json={
@@ -49,6 +50,7 @@ def test_wanted_and_intent_share_edits_matches_and_lifecycle(client):
     assert client.post(f'/api/v1/intents/{task}/complete', json={}).status_code == 200
     assert my_wanted(client, wanted['id'])['status'] == 'COMPLETED'
 
+
 def test_private_intent_is_only_published_on_request_and_cannot_be_duplicated_or_stolen(client):
     login(client)
     private = intent(client).json()['intent']
@@ -69,6 +71,7 @@ def test_private_intent_is_only_published_on_request_and_cannot_be_duplicated_or
     public = next(w for w in client.get('/api/v1/wanted/').json() if w['id'] == published.json()['id'])
     assert public['intent'] is None
 
+
 def test_unlimited_budget_and_optional_details(client):
     login(client)
     wanted = client.post('/api/v1/wanted/', json={'title': '求购鼠标'})
@@ -76,12 +79,14 @@ def test_unlimited_budget_and_optional_details(client):
     assert wanted.json()['budget'] is None and wanted.json()['category'] is None
     assert wanted.json()['intent']['max_price'] is None
 
+
 def test_optional_product_photos(client):
     login(client)
     product = publish(client, images=[])
     assert product.status_code == 201 and product.json()['images'] == []
     assert client.patch(f"/api/v1/items/{product.json()['id']}", json={'images': []}).status_code == 200
     assert client.patch(f"/api/v1/items/{product.json()['id']}", json={'images': None}).status_code == 422
+
 
 def test_legacy_database_migration_preserves_rows_and_backfills_needs(tmp_path):
     url = f'sqlite:///{tmp_path / "legacy.db"}'
@@ -121,6 +126,79 @@ def test_legacy_database_migration_preserves_rows_and_backfills_needs(tmp_path):
             assert all(c['nullable'] for c in columns if c['name'] in {'category', 'budget_cents'})
             assert client.get('/api/v1/items/').json()['total'] == 1
 
+
+def chat_photo(client):
+    stream = io.BytesIO()
+    Image.new('RGB', (80, 60), '#354e3c').save(stream, 'PNG')
+    response = client.post('/api/v1/chat-uploads', files={'file': ('chat.png', stream.getvalue(), 'image/png')})
+    assert response.status_code == 201, response.text
+    return response.json()['url']
+
+
+def test_image_only_chat_is_private_and_has_unread_preview(client):
+    login(client)
+    image = chat_photo(client)
+    assert client.get(image).status_code == 200
+    started = client.post('/api/v1/items/sample-1/conversations', json={'images': [image]})
+    assert started.status_code == 201, started.text
+    conversation_id = started.json()['conversation']['id']
+    assert started.json()['message']['body'] == '' and started.json()['message']['images'] == [image]
+    login(client, 'seller')
+    assert client.get(image).status_code == 200
+    conversation = client.get('/api/v1/conversations').json()[0]
+    assert conversation['unread_count'] == 1 and conversation['last_message']['images'] == [image]
+    assert client.post(f'/api/v1/conversations/{conversation_id}/messages', json={'images': [image]}).status_code == 422
+    assert client.post(f'/api/v1/conversations/{conversation_id}/messages', json={'images': [photo(client)]}).status_code == 422
+    reply_image = chat_photo(client)
+    reply = client.post(f'/api/v1/conversations/{conversation_id}/messages', json={'body': '商品实拍', 'images': [reply_image]})
+    assert reply.status_code == 201, reply.text
+    login(client, 'admin')
+    assert client.get(image).status_code == 404
+    assert client.get(reply_image).status_code == 404
+    client.post('/api/v1/auth/logout')
+    assert client.get(image).status_code == 401
+    login(client)
+    assert client.get(reply_image).status_code == 200
+    assert client.post(f'/api/v1/conversations/{conversation_id}/messages', json={'images': [image]}).status_code == 409
+    assert client.post(f'/api/v1/conversations/{conversation_id}/messages', json={'body': '  '}).status_code == 422
+    assert client.post(f'/api/v1/conversations/{conversation_id}/messages', json={'images': [image] * 4}).status_code == 422
+    client.post(f'/api/v1/conversations/{conversation_id}/block')
+    assert client.post(f'/api/v1/conversations/{conversation_id}/messages', json={'images': [chat_photo(client)]}).status_code == 403
+
+
+def test_reported_image_can_be_moderated_and_hidden_from_participants(client):
+    login(client)
+    started = client.post('/api/v1/items/sample-1/conversations', json={'body': '看看商品照片'})
+    conversation_id = started.json()['conversation']['id']
+    login(client, 'seller')
+    image = chat_photo(client)
+    message = client.post(f'/api/v1/conversations/{conversation_id}/messages', json={'images': [image]}).json()
+    login(client)
+    report = client.post(f"/api/v1/conversations/{conversation_id}/messages/{message['id']}/reports", json={'reason': '这张图片需要核实'})
+    assert report.status_code == 201
+    login(client, 'admin')
+    assert client.get('/api/v1/admin/chat-reports').json()[0]['message_images'] == [image]
+    assert client.get(image).status_code == 200
+    assert client.post(f"/api/v1/admin/chat-reports/{report.json()['id']}/review", json={'action': 'hide', 'note': '已核实图片不适当', 'confirmed': True}).status_code == 200
+    login(client)
+    hidden = client.get(f'/api/v1/conversations/{conversation_id}/messages').json()['messages'][-1]
+    assert hidden['hidden'] and hidden['images'] == []
+    assert client.get(image).status_code == 404
+    login(client, 'seller')
+    assert client.get(image).status_code == 404
+
+
+def test_chat_image_access_is_removed_when_message_is_pruned(client, app):
+    login(client)
+    image = chat_photo(client)
+    started = client.post('/api/v1/items/sample-1/conversations', json={'images': [image]})
+    with app.state.session_factory() as db:
+        db.get(ChatMessage, started.json()['message']['id']).created_at = now() - timedelta(days=200)
+        db.commit()
+    prune_chat(app.state.session_factory, app.state.mutation_lock, 180)
+    assert client.get(image).status_code == 404
+
+
 def test_long_private_need_can_be_published_and_edited_without_duplicating_text(client):
     login(client)
     raw = '求购鼠标' + '，具体要求可以商量' * 240
@@ -135,6 +213,15 @@ def test_long_private_need_can_be_published_and_edited_without_duplicating_text(
     response = client.patch(f"/api/v1/wanted/{wanted['id']}", json={'title': wanted['title'], 'description': wanted['description'], 'budget': 100})
     assert response.status_code == 200, response.text
     assert response.json()['intent']['raw_query'] == raw
+
+
+def test_private_chat_uploads_cannot_be_used_as_public_product_images(client):
+    login(client)
+    private = chat_photo(client)
+    assert publish(client, images=[private]).status_code == 422
+    item = publish(client, images=[]).json()
+    assert client.patch(f"/api/v1/items/{item['id']}", json={'images': [private]}).status_code == 422
+
 
 def test_publishing_a_paused_private_intent_resumes_the_same_task(client):
     login(client)

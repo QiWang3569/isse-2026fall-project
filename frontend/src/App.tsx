@@ -2655,7 +2655,9 @@ function Admin({
       {chatReports.error && <p className="form-error">{chatReports.error}</p>}
       {chatReports.data?.filter((r) => r.status === "OPEN").map((r) => <article className="review-card" key={r.id}>
         <h3>{r.item_title} · {r.sender.nickname}</h3>
-        <p>被举报消息：{r.message_body}</p><p>举报原因：{r.reason}</p>
+        <p>被举报消息：{r.message_body || "[图片]"}</p>
+        <div className="chat-images">{r.message_images.map((url) => <a key={url} href={url} target="_blank" rel="noreferrer"><img src={url} alt="被举报的聊天图片" /></a>)}</div>
+        <p>举报原因：{r.reason}</p>
         <form className="review-form" onSubmit={(e) => void reviewChat(e, r.id)}>
           <label>处理方式<select name="action"><option value="dismiss">不采纳举报</option><option value="hide">隐藏消息</option></select></label>
           <label>审核依据<input name="note" required minLength={5} maxLength={500} placeholder="写下核实结果" /></label>

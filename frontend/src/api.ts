@@ -58,6 +58,7 @@ export type ChatMessage = {
   conversation_id: string;
   sender_id: string;
   body: string;
+  images: string[];
   created_at: string;
   read_at: string | null;
   hidden: boolean;
@@ -128,6 +129,7 @@ export type ChatReport = {
   item_title: string;
   message_id: string;
   message_body: string;
+  message_images: string[];
   sender: User;
 };
 export type Notice = {

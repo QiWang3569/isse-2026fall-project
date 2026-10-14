@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, Flag, LockKeyhole, Mail, MessageCircle, Send, ShieldOff, Sparkles } from "lucide-react";
+import { ArrowLeft, ArrowRight, Flag, ImagePlus, LockKeyhole, Mail, MessageCircle, Send, ShieldOff, Sparkles, X } from "lucide-react";
 import { api, statusText, type ChatMessage, type Conversation, type Item, type Meta, type User } from "./api";
-import { Empty, ProductArt } from "./components";
+import { Empty, Modal, ProductArt } from "./components";
 
 const passwordValid = (value: string) => value.length >= 9 && value.length <= 128 && /[A-Za-z]/.test(value) && /[0-9]/.test(value);
 
@@ -225,13 +225,41 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
   const [hasMore, setHasMore] = useState(false);
   const [loadedOlder, setLoadedOlder] = useState(false);
   const [draft, setDraft] = useState("");
+  const [images, setImages] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [imageView, setImageView] = useState<string | null>(null);
+  const uploadEpoch = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [reportMessageId, setReportMessageId] = useState<string | null>(null);
   const [reportReason, setReportReason] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const [layoutHeight, setLayoutHeight] = useState<number>();
   const loadingOlder = useRef(false);
   const handledItem = useRef<string | null>(null);
+  useEffect(() => {
+    const measure = () => {
+      const layout = layoutRef.current;
+      if (!layout) return;
+      const top = layout.getBoundingClientRect().top + window.scrollY;
+      const navigation = window.innerWidth <= 650 ? document.querySelector(".sidebar")?.getBoundingClientRect().height ?? 62 : 0;
+      const viewport = window.visualViewport?.height ?? window.innerHeight;
+      setLayoutHeight(Math.max(340, Math.min(650, viewport - top - navigation - 16)));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    for (const element of document.querySelectorAll(".chat-heading, .profile-nav")) observer.observe(element);
+    window.addEventListener("resize", measure);
+    window.visualViewport?.addEventListener("resize", measure);
+    return () => { observer.disconnect(); window.removeEventListener("resize", measure); window.visualViewport?.removeEventListener("resize", measure); };
+  }, []);
+  useEffect(() => {
+    uploadEpoch.current += 1;
+    setImages([]);
+    setUploading(false);
+    setImageView(null);
+  }, [activeId, newItem?.id]);
   useEffect(() => {
     if (!initialItem) { handledItem.current = null; return; }
     if (handledItem.current === initialItem.id) return;
@@ -278,7 +306,8 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
   }, [activeId, user.id, refresh, loadedOlder]);
   useEffect(() => {
     if (loadingOlder.current) { loadingOlder.current = false; return; }
-    bottom.current?.scrollIntoView({ block: "end" });
+    const history = bottom.current?.parentElement;
+    if (history) history.scrollTop = history.scrollHeight;
   }, [activeId, messages.length]);
   const listedConversation = conversations.find((conversation) => conversation.id === activeId) ?? null;
   useEffect(() => {
@@ -322,16 +351,16 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
   }
   async function send(event: FormEvent) {
     event.preventDefault();
-    if (!draft.trim() || (!activeId && !newItem)) return;
+    if (busy || uploading || (!draft.trim() && !images.length) || (!activeId && !newItem)) return;
     setBusy(true);
     setError("");
     try {
       if (activeId) {
-        const message = await api<ChatMessage>(`/conversations/${activeId}/messages`, "POST", { body: draft });
+        const message = await api<ChatMessage>(`/conversations/${activeId}/messages`, "POST", { body: draft, images });
         setMessages((current) => [...current, message]);
       } else if (newItem) {
         const result = await api<{ conversation: Conversation; message: ChatMessage }>(
-          `/items/${newItem.id}/conversations`, "POST", { body: draft });
+          `/items/${newItem.id}/conversations`, "POST", { body: draft, images });
         setActiveId(result.conversation.id);
         setRecentConversation(result.conversation);
         setNewItem(null);
@@ -339,11 +368,31 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
         onStarted();
       }
       setDraft("");
+      setImages([]);
       refresh();
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+  async function uploadImages(files: FileList | null) {
+    if (!files?.length || uploading || busy || active?.blocked) return;
+    if (images.length + files.length > 3) { setError("每条消息最多添加 3 张图片"); return; }
+    const epoch = uploadEpoch.current;
+    setUploading(true); setError("");
+    try {
+      for (const file of Array.from(files)) {
+        const body = new FormData();
+        body.append("file", file);
+        const result = await api<{ url: string }>("/chat-uploads", "POST", body);
+        if (epoch !== uploadEpoch.current) return;
+        setImages((current) => [...current, result.url]);
+      }
+    } catch (cause) {
+      if (epoch === uploadEpoch.current) setError((cause as Error).message);
+    } finally {
+      if (epoch === uploadEpoch.current) setUploading(false);
     }
   }
   async function loadOlder() {
@@ -376,14 +425,15 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
   return (
     <section className="chat-page">
       <div className="chat-heading"><MessageCircle size={22} /><div><h1>站内消息</h1><p>关于商品的沟通会保存在这里，只有买卖双方可见。</p></div></div>
-      <div className={`chat-layout ${activeId || newItem ? "chat-active" : ""}`}>
+      <div ref={layoutRef} style={{ height: layoutHeight }} className={`chat-layout ${activeId || newItem ? "chat-active" : ""}`}>
         <div className="chat-list" aria-label="会话列表">
           {conversations.length ? conversations.map((conversation) => (
             <button key={conversation.id} className={`chat-list-item ${activeId === conversation.id ? "active" : ""}`}
+              disabled={busy || uploading}
               onClick={() => { setActiveId(conversation.id); setRecentConversation(conversation); setMessages([]); setLoadedOlder(false); setNewItem(null); setDraft(""); setReportMessageId(null); setError(""); onStarted(); }}>
               <span className="avatar">{conversation.counterpart.nickname[0]}</span>
               <span className="chat-list-text"><strong>{conversation.counterpart.nickname}</strong><small>{conversation.item_title}</small>
-                <span>{conversation.last_message?.body ?? "开始沟通"}</span></span>
+                <span>{conversation.last_message ? conversation.last_message.body || "[图片]" : "开始沟通"}</span></span>
               {conversation.unread_count > 0 && <b className="chat-unread">{conversation.unread_count}</b>}
             </button>
           )) : <p className="muted chat-empty-list">还没有消息。打开一件商品，点击“联系卖家”开始。</p>}
@@ -391,7 +441,7 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
         <div className="chat-thread">
           {(active || newItem) ? <>
             <div className="chat-thread-head">
-              <button type="button" className="chat-back" onClick={() => { setActiveId(null); setNewItem(null); onStarted(); }} aria-label="返回会话列表"><ArrowLeft size={18} /></button>
+              <button type="button" className="chat-back" disabled={busy || uploading} onClick={() => { setActiveId(null); setNewItem(null); onStarted(); }} aria-label="返回会话列表"><ArrowLeft size={18} /></button>
               <div><strong>{active?.counterpart.nickname ?? newItem?.seller.nickname}</strong>
                 <small>{active?.item_title ?? newItem?.title} · {statusText[active?.item_status ?? newItem?.status ?? ""] ?? "状态未知"}</small></div>
               {active && <button type="button" className="text-button" disabled={busy} onClick={() => void toggleBlock()}>
@@ -422,7 +472,12 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
               {hasMore && <button className="text-button" onClick={() => void loadOlder()}>加载更早的消息</button>}
               {newItem && <div className="chat-start-item"><ProductArt item={newItem} /><span>{newItem.title}</span><ArrowRight size={16} /></div>}
               {messages.map((message) => <div key={message.id} className={`chat-bubble ${message.sender_id === user.id ? "own" : ""}`}>
-                <p>{message.body}</p><time>{new Date(message.created_at).toLocaleString("zh-CN")}</time>
+                {message.body && <p>{message.body}</p>}
+                {message.images.length > 0 && <div className="chat-images">{message.images.map((url) =>
+                  <button key={url} type="button" className="chat-image-button" aria-label="查看聊天图片" onClick={() => setImageView(url)}>
+                    <img src={url} alt="聊天图片" loading="lazy" />
+                  </button>)}</div>}
+                <time>{new Date(message.created_at).toLocaleString("zh-CN")}</time>
                 {message.sender_id !== user.id && !message.hidden && <button className="text-button" type="button"
                   onClick={() => { setReportMessageId(message.id); setReportReason(""); }}><Flag size={13} />举报消息</button>}
               </div>)}
@@ -435,6 +490,15 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
               <button type="button" className="text-button" onClick={() => setReportMessageId(null)}>取消</button>
             </form>}
             <form className="chat-compose" onSubmit={(event) => void send(event)}>
+              <div className="chat-compose-tools">
+                <label className={`text-button chat-image-upload ${active?.blocked || busy || uploading || images.length >= 3 ? "disabled" : ""}`}>
+                  <ImagePlus size={17} />{uploading ? "上传中…" : "添加图片"}
+                  <input type="file" className="sr-only" accept="image/jpeg,image/png,image/webp" multiple
+                    aria-label="添加聊天图片" disabled={busy || uploading || active?.blocked || images.length >= 3}
+                    onChange={(event) => { void uploadImages(event.target.files); event.target.value = ""; }} />
+                </label>
+                <span>最多 3 张，每张不超过 6 MB</span>
+              </div>
               {newItem && (
                 <button
                   type="button"
@@ -447,15 +511,20 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
                 </button>
               )}
               <label className="sr-only" htmlFor="chat-message">消息内容</label>
-              <textarea id="chat-message" value={draft} maxLength={2000} rows={3} disabled={active?.blocked}
-                placeholder="输入想向对方确认的问题…" onChange={(event) => setDraft(event.target.value)} />
+              <textarea id="chat-message" value={draft} maxLength={2000} rows={2} disabled={busy || active?.blocked}
+                placeholder="输入消息，也可以直接发送图片…" onChange={(event) => setDraft(event.target.value)} />
+              {images.length > 0 && <div className="chat-attachment-preview">{images.map((url) =>
+                <div className="upload-preview" key={url}><img src={url} alt="待发送图片" />
+                  <button type="button" disabled={busy || uploading} aria-label="移除待发送图片" onClick={() => setImages((current) => current.filter((image) => image !== url))}><X size={14} /></button>
+                </div>)}</div>}
               <div><span>请勿提前转账；交接前当面核实商品。</span>
-                <button className="button primary" disabled={busy || active?.blocked || !draft.trim()}><Send size={15} />确认发送</button></div>
+                <button className="button primary" disabled={busy || uploading || active?.blocked || (!draft.trim() && !images.length)}><Send size={15} />确认发送</button></div>
               {error && <p className="form-error" role="alert">{error}</p>}
             </form>
           </> : <Empty title="选择一条会话" text="你与其他同学的商品沟通会显示在这里。" />}
         </div>
       </div>
+      {imageView && <Modal title="聊天图片" onClose={() => setImageView(null)}><img className="chat-image-full" src={imageView} alt="聊天图片原图" /></Modal>}
     </section>
   );
 }

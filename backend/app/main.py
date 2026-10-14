@@ -27,7 +27,7 @@ from .email_auth import code_digest, new_code, normalize_pku_email, send_verific
 from .matching import MatchingRunner, intent_data
 from .retention import prune_chat
 from .needs import apply_wanted, backfill_wanted, sync_wanted, wanted_query
-from .models import ActionLog, Announcement, AnnouncementRead, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
+from .models import ActionLog, Announcement, AnnouncementRead, ChatAttachment, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
 from .password_auth import DUMMY_HASH, hash_password, new_password_error, verify_password
 from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, SmartSearchIn, StatusChange, WantedCreate, WantedUpdate
 from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, parse_local, seed
@@ -50,6 +50,8 @@ def create_app(settings: Settings | None = None):
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     upload_dir = settings.data_dir / 'uploads'
     upload_dir.mkdir(exist_ok=True)
+    chat_upload_dir = settings.data_dir / 'chat-uploads'
+    chat_upload_dir.mkdir(exist_ok=True)
     engine = create_engine(settings.database_url, connect_args={'check_same_thread': False, 'timeout': 30} if settings.database_url.startswith('sqlite') else {}, pool_pre_ping=True)
     if engine.dialect.name == 'sqlite':
         @event.listens_for(engine, 'connect')
@@ -422,9 +424,14 @@ def create_app(settings: Settings | None = None):
             raise HTTPException(404, '会话不存在')
         return conversation
 
-    def message_out(message):
+    def message_images(message, db):
+        return list(db.scalars(select(ChatAttachment.path).where(ChatAttachment.message_id == message.id)
+                               .order_by(ChatAttachment.position)))
+
+    def message_out(message, db):
         return {'id': message.id, 'conversation_id': message.conversation_id,
                 'sender_id': message.sender_id, 'body': '此消息已被管理员隐藏' if message.hidden_at else message.body,
+                'images': [] if message.hidden_at else message_images(message, db),
                 'hidden': bool(message.hidden_at),
                 'created_at': iso(message.created_at),
                 'read_at': iso(message.read_at) if message.read_at else None}
@@ -442,7 +449,7 @@ def create_app(settings: Settings | None = None):
                 'seller_id': conversation.seller_id, 'item_title': item.title,
                 'item_status': item.status, 'item_image': item.images[0] if item.images else None,
                 'counterpart': user_out(db.get(User, counterpart_id)),
-                'last_message': message_out(last_message) if last_message else None,
+                'last_message': message_out(last_message, db) if last_message else None,
                 'unread_count': unread, 'updated_at': iso(conversation.last_message_at),
                 'blocked': blocked, 'blocked_by_me': db.get(UserBlock, (user.id, counterpart_id)) is not None,
                 'deal_status': conversation.deal_status}
@@ -450,6 +457,21 @@ def create_app(settings: Settings | None = None):
     def assert_unblocked(db, first_id, second_id):
         if db.get(UserBlock, (first_id, second_id)) or db.get(UserBlock, (second_id, first_id)):
             raise HTTPException(403, '双方已停止联系，不能发送消息')
+
+    def create_chat_message(db, conversation, user, data):
+        for path in data.images:
+            upload = db.scalar(select(Upload).where(Upload.path == path).with_for_update())
+            if not path.startswith('/api/v1/chat-images/') or not upload or upload.user_id != user.id:
+                raise HTTPException(422, '只能发送自己上传的聊天图片')
+            if db.get(ChatAttachment, path):
+                raise HTTPException(409, '这张图片已经发送，请重新上传')
+        message = ChatMessage(conversation_id=conversation.id, sender_id=user.id, body=data.body)
+        db.add(message)
+        db.flush()
+        for position, path in enumerate(data.images):
+            db.add(ChatAttachment(path=path, message_id=message.id, position=position))
+        conversation.last_message_at = message.created_at
+        return message
 
     @app.get('/api/v1/conversations')
     def conversations(db: Session = Depends(get_db), user=Depends(require_user)):
@@ -472,12 +494,9 @@ def create_app(settings: Settings | None = None):
                 conversation = Conversation(item_id=item.id, buyer_id=user.id, seller_id=item.seller_id)
                 db.add(conversation)
                 db.flush()
-            message = ChatMessage(conversation_id=conversation.id, sender_id=user.id, body=data.body)
-            db.add(message)
-            db.flush()
-            conversation.last_message_at = message.created_at
+            message = create_chat_message(db, conversation, user, data)
             db.commit()
-            return {'conversation': conversation_out(db, conversation, user), 'message': message_out(message)}
+            return {'conversation': conversation_out(db, conversation, user), 'message': message_out(message, db)}
 
     @app.get('/api/v1/conversations/{conversation_id}/messages')
     def conversation_messages(conversation_id: str, before_id: str | None = None,
@@ -491,7 +510,7 @@ def create_app(settings: Settings | None = None):
             query = query.where(or_(ChatMessage.created_at < anchor.created_at,
                                     (ChatMessage.created_at == anchor.created_at) & (ChatMessage.id < anchor.id)))
         rows = db.scalars(query.order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc()).limit(51)).all()
-        return {'messages': [message_out(row) for row in reversed(rows[:50])], 'has_more': len(rows) > 50}
+        return {'messages': [message_out(row, db) for row in reversed(rows[:50])], 'has_more': len(rows) > 50}
 
     @app.post('/api/v1/conversations/{conversation_id}/messages', status_code=201)
     def send_message(conversation_id: str, data: ChatMessageCreate,
@@ -500,12 +519,9 @@ def create_app(settings: Settings | None = None):
             conversation = owned_conversation(db, conversation_id, user)
             counterpart_id = conversation.seller_id if user.id == conversation.buyer_id else conversation.buyer_id
             assert_unblocked(db, user.id, counterpart_id)
-            message = ChatMessage(conversation_id=conversation.id, sender_id=user.id, body=data.body)
-            db.add(message)
-            db.flush()
-            conversation.last_message_at = message.created_at
+            message = create_chat_message(db, conversation, user, data)
             db.commit()
-            return message_out(message)
+            return message_out(message, db)
 
     @app.post('/api/v1/conversations/{conversation_id}/read')
     def read_conversation(conversation_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
@@ -736,8 +752,7 @@ def create_app(settings: Settings | None = None):
     def item_detail(item_id: str, db: Session = Depends(get_db), user=Depends(current_user)):
         return item_out(get_item(db, item_id), db, user)
 
-    @app.post('/api/v1/uploads', status_code=201)
-    def upload(file: UploadFile = File(...), user=Depends(require_user), db: Session = Depends(get_db)):
+    def save_image(file, user, db, private=False):
         raw = file.file.read(6*1024*1024+1)
         if len(raw) > 6*1024*1024:
             raise HTTPException(413, '每张图片不得超过 6 MB')
@@ -753,13 +768,37 @@ def create_app(settings: Settings | None = None):
                     im = im.convert('RGB')
                     im.thumbnail((1600, 1600))
                     name = uid() + '.jpg'
-                    im.save(upload_dir / name, 'JPEG', quality=88)
+                    im.save((chat_upload_dir if private else upload_dir) / name, 'JPEG', quality=88)
         except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
             raise HTTPException(422, '请上传有效的 JPG、PNG 或 WebP 图片（不超过 2000 万像素）')
-        path = '/uploads/' + name
+        path = ('/api/v1/chat-images/' if private else '/uploads/') + name
         db.add(Upload(path=path, user_id=user.id))
         db.commit()
         return {'url': path}
+
+    @app.post('/api/v1/uploads', status_code=201)
+    def upload(file: UploadFile = File(...), user=Depends(require_user), db: Session = Depends(get_db)):
+        return save_image(file, user, db)
+
+    @app.post('/api/v1/chat-uploads', status_code=201)
+    def chat_upload(file: UploadFile = File(...), user=Depends(require_user), db: Session = Depends(get_db)):
+        return save_image(file, user, db, private=True)
+
+    @app.get('/api/v1/chat-images/{name}')
+    def chat_image(name: str, user=Depends(require_user), db: Session = Depends(get_db)):
+        path = '/api/v1/chat-images/' + name
+        upload = db.get(Upload, path)
+        attachment = db.get(ChatAttachment, path)
+        allowed = bool(upload and upload.user_id == user.id and not attachment)
+        if attachment:
+            message = db.get(ChatMessage, attachment.message_id)
+            conversation = db.get(Conversation, message.conversation_id)
+            allowed = not message.hidden_at and user.id in {conversation.buyer_id, conversation.seller_id}
+            if user.role == 'admin' and db.scalar(select(ChatReport.id).where(ChatReport.message_id == message.id).limit(1)):
+                allowed = True
+        if not allowed or not re.fullmatch(r'[0-9a-f-]{36}\.jpg', name) or not (chat_upload_dir / name).is_file():
+            raise HTTPException(404, '图片不存在或无权查看')
+        return FileResponse(chat_upload_dir / name, media_type='image/jpeg', headers={'Cache-Control': 'private, no-store'})
 
     def publish_item(data: ItemCreate, db: Session, user: User, draft_id: str | None = None):
         for path in data.images:
@@ -1345,6 +1384,7 @@ def create_app(settings: Settings | None = None):
             result.append({'id': report.id, 'reason': report.reason, 'status': report.status,
                            'created_at': iso(report.created_at), 'item_title': db.get(Item, conversation.item_id).title,
                            'message_id': message.id, 'message_body': message.body,
+                           'message_images': message_images(message, db),
                            'sender': user_out(db.get(User, message.sender_id))})
         return result
 

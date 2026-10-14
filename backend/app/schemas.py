@@ -191,14 +191,16 @@ class ProfileUpdate(StrictModel):
 
 
 class ChatMessageCreate(StrictModel):
-    body: str = Field(min_length=1, max_length=2000)
+    body: str = Field(default='', max_length=2000)
+    images: list[str] = Field(default_factory=list, max_length=3)
 
-    @field_validator('body')
-    @classmethod
-    def nonblank(cls, value):
-        if not value.strip():
+    @model_validator(mode='after')
+    def nonblank(self):
+        if not self.body and not self.images:
             raise ValueError('消息不能为空')
-        return value.strip()
+        if len(set(self.images)) != len(self.images):
+            raise ValueError('不能重复添加同一张图片')
+        return self
 
 
 class ChatReportCreate(StrictModel):
