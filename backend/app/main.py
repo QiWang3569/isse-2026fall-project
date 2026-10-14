@@ -762,11 +762,9 @@ def create_app(settings: Settings | None = None):
         return {'url': path}
 
     def publish_item(data: ItemCreate, db: Session, user: User, draft_id: str | None = None):
-        if not data.images:
-            raise HTTPException(422, '请至少上传一张商品照片')
         for path in data.images:
             image = db.get(Upload, path)
-            if not image or image.user_id != user.id:
+            if not path.startswith('/uploads/') or not image or image.user_id != user.id:
                 raise HTTPException(422, '只能使用自己上传的商品图片')
         if draft_id and not db.scalar(select(ItemDraft.id).where(ItemDraft.id == draft_id,
                                                                   ItemDraft.seller_id == user.id)):
@@ -847,7 +845,7 @@ def create_app(settings: Settings | None = None):
                 raise HTTPException(422, '原始描述、校区、成色、标签和照片不能设为空')
             for path in values.get('images', []):
                 image = db.get(Upload, path)
-                if not image or image.user_id != user.id:
+                if not path.startswith('/uploads/') or not image or image.user_id != user.id:
                     raise HTTPException(422, '只能使用自己上传的商品图片')
             if 'price' in data.model_fields_set:
                 draft.price_cents = int(data.price * 100) if data.price is not None else None
@@ -880,12 +878,12 @@ def create_app(settings: Settings | None = None):
             if item.status in {'SOLD', 'BANNED'}:
                 raise HTTPException(409, '已售出或审核隐藏的商品不能编辑')
             values = data.model_dump(exclude_unset=True)
+            if any(value is None for value in values.values()):
+                raise HTTPException(422, '商品字段不能设为 null')
             if 'images' in values:
-                if not values['images']:
-                    raise HTTPException(422, '请至少保留一张商品照片')
                 for path in values['images']:
                     image = db.get(Upload, path)
-                    if not image or image.user_id != user.id:
+                    if not path.startswith('/uploads/') or not image or image.user_id != user.id:
                         raise HTTPException(422, '只能使用自己上传的商品图片')
             if 'price' in values:
                 item.price_cents = int(values.pop('price') * 100)

@@ -76,6 +76,13 @@ def test_unlimited_budget_and_optional_details(client):
     assert wanted.json()['budget'] is None and wanted.json()['category'] is None
     assert wanted.json()['intent']['max_price'] is None
 
+def test_optional_product_photos(client):
+    login(client)
+    product = publish(client, images=[])
+    assert product.status_code == 201 and product.json()['images'] == []
+    assert client.patch(f"/api/v1/items/{product.json()['id']}", json={'images': []}).status_code == 200
+    assert client.patch(f"/api/v1/items/{product.json()['id']}", json={'images': None}).status_code == 422
+
 def test_legacy_database_migration_preserves_rows_and_backfills_needs(tmp_path):
     url = f'sqlite:///{tmp_path / "legacy.db"}'
     engine = create_engine(url)

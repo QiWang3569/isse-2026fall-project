@@ -24,7 +24,7 @@ def test_imported_items_remain_private_until_owner_reviews_and_publishes(client)
     assert client.patch(f'/api/v1/item-drafts/{draft_id}', json={'images': [buyer_image]}).status_code == 422
     assert client.post(f'/api/v1/item-drafts/{draft_id}/publish', json={
         'title': '罗技静音鼠标', 'description': '九成新静音鼠标，万柳面交。',
-        'category': '数码与影音', 'price': 50, 'campus': '万柳学区',
+        'category': '数码与影音', 'price': -1, 'campus': '万柳学区',
         'condition_grade': '9成新', 'tags': [], 'images': [],
     }).status_code == 422
     assert len(client.get('/api/v1/item-drafts/').json()) == 2
@@ -64,4 +64,16 @@ def test_import_checks_line_limit_and_preserves_existing_drafts_on_error(client)
     })
     assert short_line.status_code == 422
     assert '第 2 件' in short_line.json()['detail']
+    assert client.get('/api/v1/item-drafts/').json() == []
+
+
+def test_draft_can_be_published_without_photos(client):
+    login(client, 'seller')
+    draft = client.post('/api/v1/item-drafts/import', json={'text': '静音鼠标50元，万柳面交'}).json()[0]
+    result = client.post(f"/api/v1/item-drafts/{draft['id']}/publish", json={
+        'title': '静音鼠标', 'description': '静音鼠标，万柳当面交易。', 'category': '数码与影音',
+        'price': 50, 'campus': '万柳学区', 'images': [],
+    })
+    assert result.status_code == 201, result.text
+    assert result.json()['images'] == []
     assert client.get('/api/v1/item-drafts/').json() == []

@@ -285,7 +285,7 @@ export function PublishWorkspace({ meta, onDone, onDraftPublished }: Common & { 
         <textarea rows={8} maxLength={10000} value={source} onChange={(e) => setSource(e.target.value)}
           placeholder={"九成新罗技静音鼠标，50 元，万柳面交\n高数教材一本，20 元，燕园面交"} />
       </label>
-      <p className="hint">已填写 {lines.length} 件。导入后请逐件检查识别结果、上传真实照片，再选择发布。最多保存 50 件待发布商品。</p>
+      <p className="hint">已填写 {lines.length} 件。导入后请逐件检查识别结果，可以添加照片，再选择发布。最多保存 50 件待发布商品。</p>
       <button type="button" className="button primary full" disabled={busy || !lines.length} onClick={() => void importLines()}>
         {busy ? "正在逐件识别…" : "导入待发布商品"}
       </button>
@@ -298,7 +298,7 @@ export function PublishWorkspace({ meta, onDone, onDraftPublished }: Common & { 
             <span className="draft-status">待发布</span>
             <h3>{draft.title || "待补充标题"}</h3>
             <p>{draft.raw}</p>
-            <small>{draft.price == null ? "待补充价格" : `¥${draft.price}`} · {draft.images.length ? `已上传 ${draft.images.length} 张照片` : "待上传照片"}</small>
+            <small>{draft.price == null ? "待补充价格" : `¥${draft.price}`} · {draft.images.length ? `已上传 ${draft.images.length} 张照片` : "暂未添加照片（可选）"}</small>
             {draft.clarification && <small>请核对：{draft.clarification}</small>}
           </div>
           <div className="draft-card-actions">
@@ -409,10 +409,6 @@ export function PublishForm({
   }
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!images.length) {
-      setError("请至少上传一张商品照片");
-      return;
-    }
     setBusy(true);
     setError("");
     try {
@@ -447,7 +443,7 @@ export function PublishForm({
       <div className="form-callout">
         <Sparkles size={22} />
         <p>
-          {draft ? "这件商品还未公开。请核对识别结果、补充真实照片，再保存草稿或发布。" : "懒人模式：把要卖的东西用一句话说出来，点“智能识别并填充”，信息会自动填好，你再补充照片即可。"}
+          {draft ? "这件商品还未公开。请核对识别结果，再保存草稿或发布，照片可稍后补充。" : "懒人模式：把要卖的东西用一句话说出来，点“智能识别并填充”，信息会自动填好，确认信息后即可发布，照片选填。"}
         </p>
       </div>
       <label>
@@ -471,7 +467,7 @@ export function PublishForm({
       </button>
       <div>
         <span className="field-title">
-          商品照片 <small>1–3 张 · JPG / PNG / WebP · 每张不超过 6 MB</small>
+          商品照片 <small>选填，最多 3 张 · JPG / PNG / WebP · 每张不超过 6 MB</small>
         </span>
         <div className="upload-row">
           {images.map((url) => (
@@ -586,7 +582,7 @@ export function PublishForm({
         />
       </label>
       <p className="hint">
-        商品默认在售 14 天。成交后记得标记“已售出”，让彼此少一点等待。
+        商品持续展示，成交后记得标记“已售出”。照片可以稍后补充。
       </p>
       {error && (
         <p className="form-error" role="alert">

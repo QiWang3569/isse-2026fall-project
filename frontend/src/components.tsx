@@ -30,7 +30,7 @@ export function Brand({ small = false }: { small?: boolean }) {
 export function ProductArt({
   item,
 }: {
-  item: Pick<Item, "art" | "images" | "title">;
+  item: Pick<Item, "art" | "images" | "title" | "is_demo">;
 }) {
   const id = useId().replace(/:/g, "");
   if (item.images.length)
@@ -42,6 +42,9 @@ export function ProductArt({
         loading="lazy"
       />
     );
+  if (!item.is_demo) return <div className="product-art product-placeholder" role="img" aria-label={`${item.title}（暂无图片）`}>
+    <PackageOpen size={38} strokeWidth={1.25} /><span>暂无图片</span>
+  </div>;
   const art = item.art;
   const bg: Record<string, string> = {
     mouse: "#e5e6df",

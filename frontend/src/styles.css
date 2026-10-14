@@ -2910,10 +2910,13 @@ footer .brand svg {
   .publish-tabs button { font-size: 11px; }
 }
 
+.product-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; background: #edf2ec; color: #778b7b; }
+.product-placeholder span { font-size: 12px; }
 .wanted-matching { display: grid; gap: 7px; padding: 12px 0; border-top: 1px solid var(--line); }
 .wanted-matching > span { color: var(--muted); font-size: 11px; }
 .wanted-actions, .task-actions { flex-wrap: wrap; }
 .intent-card-bottom, .wanted-bottom { flex-wrap: wrap; }
+:root[data-theme="dark"] .product-placeholder { background: #2a3d2e; color: #c8cabc; }
 
 /* The same content and controls remain usable in both color schemes. */
 :root[data-theme="dark"] {
