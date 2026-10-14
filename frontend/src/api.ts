@@ -24,7 +24,6 @@ export type Item = {
   seller: User;
   created_at: string;
   expires_at: string | null;
-  validity_days: number;
   is_favorite: boolean;
   is_owner: boolean;
   is_demo: boolean;
@@ -35,7 +34,6 @@ export type Item = {
 };
 export type ItemDraft = {
   id: string;
-  validity_days: number;
   raw: string;
   title: string | null;
   description: string | null;
@@ -65,6 +63,7 @@ export type ChatMessage = {
   conversation_id: string;
   sender_id: string;
   body: string;
+  images: string[];
   created_at: string;
   read_at: string | null;
   hidden: boolean;
@@ -120,7 +119,8 @@ export type Intent = Parsed & {
   match_count: number;
   created_at: string;
   expires_at: string | null;
-  validity_days: number;
+  wanted_id: string | null;
+  wanted_status: string | null;
   matching_mode: string;
   matching_state: "PENDING" | "RUNNING" | "DONE" | "FAILED";
   completed_item_id: string | null;
@@ -134,6 +134,7 @@ export type ChatReport = {
   item_title: string;
   message_id: string;
   message_body: string;
+  message_images: string[];
   sender: User;
 };
 export type Notice = {
@@ -171,17 +172,15 @@ export type Wanted = {
   id: string;
   title: string;
   description: string;
-  category: string;
-  budget: number;
+  category: string | null;
+  budget: number | null;
   campus: string;
   buyer: User;
   is_owner: boolean;
   status: string;
   created_at: string;
   expires_at: string | null;
-  validity_days: number;
-  linked_intent_id: string | null;
-  linked_intent_status: string | null;
+  intent: Intent | null;
 };
 export type Report = {
   id: string;
@@ -235,9 +234,6 @@ export async function api<T>(
 }
 export const money = (n: number) =>
   n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
-export const expiryText = (value: string | null) => value
-  ? `${new Date(value).toLocaleString("zh-CN", { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })} 到期`
-  : "长期有效";
 export const campusShort = (v: string) =>
   v.replace("校本部", "").replace("学区", "").replace("新校区", "");
 export const statusText: Record<string, string> = {

@@ -17,7 +17,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
-from pydantic import ValidationError
 from sqlalchemy import case, create_engine, delete, event, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -26,17 +25,15 @@ from .config import ROOT, Settings
 from .chat_email import ChatEmailRunner
 from .database import prepare_database, retire_demo_data
 from .email_auth import code_digest, new_code, normalize_pku_email, send_verification_email
-from .matching import MatchingRunner
-from .expiry import expiry_fields, is_expired, renew, unexpired
+from .matching import MatchingRunner, intent_data
 from .item_lifecycle import (PUBLIC_ITEM_STATES, can_manage, change_conversation,
                              item_capabilities, sync_conversations, validate_seller_status)
 from .search import keyword_filters
-from .wanted_watch import add_wanted_watch, linked_watch, watch_conditions
-from .schemas import WantedWatchCreate
 from .retention import prune_chat
-from .models import ActionLog, Announcement, AnnouncementRead, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
+from .needs import apply_wanted, backfill_wanted, sync_wanted, wanted_query
+from .models import ActionLog, Announcement, AnnouncementRead, ChatAttachment, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
 from .password_auth import DUMMY_HASH, hash_password, new_password_error, verify_password
-from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, ExpiryUpdate, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, SmartSearchIn, StatusChange, WantedCreate, WantedUpdate
+from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, SmartSearchIn, StatusChange, WantedCreate, WantedUpdate
 from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, parse_local, seed
 
 
@@ -57,6 +54,8 @@ def create_app(settings: Settings | None = None):
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     upload_dir = settings.data_dir / 'uploads'
     upload_dir.mkdir(exist_ok=True)
+    chat_upload_dir = settings.data_dir / 'chat-uploads'
+    chat_upload_dir.mkdir(exist_ok=True)
     engine = create_engine(settings.database_url, connect_args={'check_same_thread': False, 'timeout': 30} if settings.database_url.startswith('sqlite') else {}, pool_pre_ping=True)
     if engine.dialect.name == 'sqlite':
         @event.listens_for(engine, 'connect')
@@ -82,6 +81,7 @@ def create_app(settings: Settings | None = None):
                 await asyncio.sleep(86400)
                 await asyncio.to_thread(prune_chat, factory, mutation_lock, settings.chat_retention_days)
         retention_task = asyncio.create_task(retention_loop())
+        backfill_wanted(factory, matching, settings)
         matching.start()
         chat_email.start()
         try:
@@ -122,17 +122,6 @@ def create_app(settings: Settings | None = None):
 
     def get_db():
         with factory() as db:
-            instant = now()
-            for cls, states in ((Item, ['ACTIVE']), (Intent, ['ACTIVE', 'PAUSED']), (Wanted, ['ACTIVE'])):
-                db.execute(update(cls).where(cls.validity_days != 0, cls.expires_at <= instant,
-                           cls.status.in_(states)).values(status='EXPIRED'))
-            db.execute(update(Conversation).where(Conversation.deal_status == 'RESERVED',
-                       Conversation.item_id.in_(select(Item.id).where(Item.status == 'EXPIRED')))
-                       .values(deal_status='CANCELED'))
-            db.execute(update(Conversation).where(Conversation.deal_status == 'REQUESTED',
-                       Conversation.item_id.in_(select(Item.id).where(Item.status == 'EXPIRED')))
-                       .values(deal_status='DECLINED'))
-            db.commit()
             yield db
 
     def current_user(request: Request, db: Session = Depends(get_db)):
@@ -186,14 +175,14 @@ def create_app(settings: Settings | None = None):
                     'description': '', 'category': '', 'price': 0, 'campus': '', 'condition_grade': '',
                     'tags': [], 'images': [], 'art': 'box', 'status': item.status,
                     'seller': {'id': '', 'nickname': '—', 'campus': '', 'role': 'student'},
-                    'created_at': iso(item.created_at), **expiry_fields(item),
+                    'created_at': iso(item.created_at), 'expires_at': None,
                     'is_favorite': False, 'is_owner': False, 'is_demo': False, 'sale_feedback_count': 0,
                     'can_relist': False, 'can_withdraw': False, 'can_duplicate': False}
         seller = db.get(User, item.seller_id)
         return {'id': item.id, 'title': item.title, 'description': item.description, 'category': item.category,
                 'price': item.price_cents / 100, 'campus': item.campus, 'condition_grade': item.condition_grade,
                 'tags': item.tags, 'images': item.images, 'art': item.art, 'status': item.status,
-                'seller': user_out(seller), 'created_at': iso(item.created_at), **expiry_fields(item),
+                'seller': user_out(seller), 'created_at': iso(item.created_at), 'expires_at': None,
                 'is_favorite': bool(user and db.get(Favorite, (user.id, item.id))),
                 'is_owner': bool(user and user.id == item.seller_id), 'is_demo': item.id.startswith('sample-'),
                 **item_capabilities(db, item, user),
@@ -206,63 +195,29 @@ def create_app(settings: Settings | None = None):
                 'price': draft.price_cents / 100 if draft.price_cents is not None else None,
                 'campus': draft.campus, 'condition_grade': draft.condition_grade,
                 'tags': draft.tags, 'images': draft.images, 'clarification': draft.clarification,
-                'validity_days': draft.validity_days,
                 'created_at': iso(draft.created_at), 'updated_at': iso(draft.updated_at)}
-
-    def wanted_out(wanted, db, user):
-        task = linked_watch(db, wanted, user)
-        return {'id': wanted.id, 'title': wanted.title, 'description': wanted.description,
-                'category': wanted.category, 'budget': wanted.budget_cents / 100,
-                'campus': wanted.campus, 'buyer': user_out(db.get(User, wanted.buyer_id)),
-                'status': wanted.status, 'is_owner': bool(user and wanted.buyer_id == user.id),
-                'created_at': iso(wanted.created_at), **expiry_fields(wanted),
-                'linked_intent_id': task.id if task else None,
-                'linked_intent_status': task.status if task else None}
-
-    def owned_wanted(db, wanted_id, user, lock=False):
-        wanted = (db.scalar(select(Wanted).where(Wanted.id == wanted_id).with_for_update()
-                            .execution_options(populate_existing=True)) if lock else db.get(Wanted, wanted_id))
-        if not wanted or wanted.buyer_id != user.id:
-            raise HTTPException(404, '求购不存在')
-        return wanted
-
-    def prepare_watch(wanted):
-        try:
-            parsed = watch_conditions(wanted)
-        except ValidationError:
-            raise HTTPException(422, '求购条件存在冲突或过多，请简化描述后再开启代蹲') from None
-        if not parsed.keywords:
-            raise HTTPException(422, '请在求购标题中填写具体物品名称后再开启代蹲')
-        return parsed, embed(' '.join(parsed.keywords), settings)
 
     def intent_out(intent, db):
         count = db.scalar(select(func.count()).select_from(Notification).where(Notification.intent_id == intent.id, Notification.verdict != 'NO_MATCH'))
         job = db.scalar(select(MatchJob).where(MatchJob.target_id == intent.id).order_by(MatchJob.created_at.desc()).limit(1))
         outstanding = db.scalar(select(MatchJob).where(MatchJob.target_id == intent.id, MatchJob.status.in_(['PENDING', 'RUNNING', 'FAILED'])).order_by(MatchJob.created_at.desc()).limit(1))
         state = (outstanding or job).status if outstanding or job else 'DONE'
-        return {'id': intent.id, 'raw_query': intent.raw_query, 'category': intent.category,
+        wanted = db.scalar(select(Wanted).where(Wanted.intent_id == intent.id))
+        return {'wanted_id': wanted.id if wanted else None, 'wanted_status': wanted.status if wanted else None,
+                'id': intent.id, 'raw_query': intent.raw_query, 'category': intent.category,
                 'max_price': intent.max_price_cents / 100 if intent.max_price_cents is not None else None,
                 'campus': intent.campus, 'keywords': intent.keywords, 'condition_grade': intent.condition_grade,
                 'excluded_keywords': intent.excluded_keywords, 'preferences': intent.preferences, 'clarification': None,
                 'matching_state': state,
                 'status': intent.status, 'completed_item_id': intent.completed_item_id,
                 'match_count': count, 'created_at': iso(intent.created_at),
-                **expiry_fields(intent), 'matching_mode': intent.embedding_model}
+                'expires_at': None, 'matching_mode': intent.embedding_model}
 
     def owned_intent(db, id, user):
         intent = db.get(Intent, id)
         if not intent or intent.buyer_id != user.id:
             raise HTTPException(404, '代蹲任务不存在')
         return intent
-
-    def check_intent_limit(db, user, exclude=None):
-        # PostgreSQL row lock and in-process lock protect the per-user quota.
-        db.scalar(select(User).where(User.id == user.id).with_for_update())
-        query = select(func.count()).select_from(Intent).where(Intent.buyer_id == user.id, Intent.status == 'ACTIVE', Intent.expires_at > now())
-        if exclude:
-            query = query.where(Intent.id != exclude)
-        if db.scalar(query) >= 5:
-            raise HTTPException(409, '最多同时运行 5 个代蹲任务，请先暂停或结束一个任务')
 
     @app.get('/api/v1/health')
     def health():
@@ -274,7 +229,7 @@ def create_app(settings: Settings | None = None):
                 'chat_email_ready': settings.chat_email_ready,
                 'demo_mode': settings.demo_mode, 'ai_mode': settings.ai_mode, 'embedding_mode': settings.embedding_mode,
                 'email_auth_ready': settings.email_auth_ready,
-                'active_items': db.scalar(select(func.count()).select_from(Item).where(Item.status == 'ACTIVE', unexpired(Item)))}
+                'active_items': db.scalar(select(func.count()).select_from(Item).where(Item.status == 'ACTIVE'))}
 
     @app.get('/api/v1/announcements')
     def announcements(db: Session = Depends(get_db)):
@@ -495,9 +450,14 @@ def create_app(settings: Settings | None = None):
             raise HTTPException(404, '会话不存在')
         return conversation
 
-    def message_out(message):
+    def message_images(message, db):
+        return list(db.scalars(select(ChatAttachment.path).where(ChatAttachment.message_id == message.id)
+                               .order_by(ChatAttachment.position)))
+
+    def message_out(message, db):
         return {'id': message.id, 'conversation_id': message.conversation_id,
                 'sender_id': message.sender_id, 'body': '此消息已被管理员隐藏' if message.hidden_at else message.body,
+                'images': [] if message.hidden_at else message_images(message, db),
                 'hidden': bool(message.hidden_at),
                 'created_at': iso(message.created_at),
                 'read_at': iso(message.read_at) if message.read_at else None}
@@ -516,7 +476,7 @@ def create_app(settings: Settings | None = None):
                 'item_status': item.status,
                 'item_image': item.images[0] if item.images and item.status in PUBLIC_ITEM_STATES else None,
                 'counterpart': user_out(db.get(User, counterpart_id)),
-                'last_message': message_out(last_message) if last_message else None,
+                'last_message': message_out(last_message, db) if last_message else None,
                 'unread_count': unread, 'updated_at': iso(conversation.last_message_at),
                 'blocked': blocked, 'blocked_by_me': db.get(UserBlock, (user.id, counterpart_id)) is not None,
                 'deal_status': conversation.deal_status}
@@ -524,6 +484,21 @@ def create_app(settings: Settings | None = None):
     def assert_unblocked(db, first_id, second_id):
         if db.get(UserBlock, (first_id, second_id)) or db.get(UserBlock, (second_id, first_id)):
             raise HTTPException(403, '双方已停止联系，不能发送消息')
+
+    def create_chat_message(db, conversation, user, data):
+        for path in data.images:
+            upload = db.scalar(select(Upload).where(Upload.path == path).with_for_update())
+            if not path.startswith('/api/v1/chat-images/') or not upload or upload.user_id != user.id:
+                raise HTTPException(422, '只能发送自己上传的聊天图片')
+            if db.get(ChatAttachment, path):
+                raise HTTPException(409, '这张图片已经发送，请重新上传')
+        message = ChatMessage(conversation_id=conversation.id, sender_id=user.id, body=data.body)
+        db.add(message)
+        db.flush()
+        for position, path in enumerate(data.images):
+            db.add(ChatAttachment(path=path, message_id=message.id, position=position))
+        conversation.last_message_at = message.created_at
+        return message
 
     @app.get('/api/v1/conversations')
     def conversations(db: Session = Depends(get_db), user=Depends(require_user)):
@@ -542,7 +517,7 @@ def create_app(settings: Settings | None = None):
             if item.seller_id == user.id:
                 raise HTTPException(403, '不能给自己的商品发消息')
             assert_unblocked(db, user.id, item.seller_id)
-            if item.status != 'ACTIVE' or is_expired(item):
+            if item.status != 'ACTIVE':
                 raise HTTPException(409, '商品当前不可咨询')
             conversation = db.scalar(select(Conversation).where(Conversation.item_id == item.id,
                                     Conversation.buyer_id == user.id))
@@ -550,12 +525,9 @@ def create_app(settings: Settings | None = None):
                 conversation = Conversation(item_id=item.id, buyer_id=user.id, seller_id=item.seller_id)
                 db.add(conversation)
                 db.flush()
-            message = ChatMessage(conversation_id=conversation.id, sender_id=user.id, body=data.body)
-            db.add(message)
-            db.flush()
-            conversation.last_message_at = message.created_at
+            message = create_chat_message(db, conversation, user, data)
             db.commit()
-            return {'conversation': conversation_out(db, conversation, user), 'message': message_out(message)}
+            return {'conversation': conversation_out(db, conversation, user), 'message': message_out(message, db)}
 
     @app.get('/api/v1/conversations/{conversation_id}/messages')
     def conversation_messages(conversation_id: str, before_id: str | None = None,
@@ -569,7 +541,7 @@ def create_app(settings: Settings | None = None):
             query = query.where(or_(ChatMessage.created_at < anchor.created_at,
                                     (ChatMessage.created_at == anchor.created_at) & (ChatMessage.id < anchor.id)))
         rows = db.scalars(query.order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc()).limit(51)).all()
-        return {'messages': [message_out(row) for row in reversed(rows[:50])], 'has_more': len(rows) > 50}
+        return {'messages': [message_out(row, db) for row in reversed(rows[:50])], 'has_more': len(rows) > 50}
 
     @app.post('/api/v1/conversations/{conversation_id}/messages', status_code=201)
     def send_message(conversation_id: str, data: ChatMessageCreate,
@@ -578,12 +550,9 @@ def create_app(settings: Settings | None = None):
             conversation = owned_conversation(db, conversation_id, user)
             counterpart_id = conversation.seller_id if user.id == conversation.buyer_id else conversation.buyer_id
             assert_unblocked(db, user.id, counterpart_id)
-            message = ChatMessage(conversation_id=conversation.id, sender_id=user.id, body=data.body)
-            db.add(message)
-            db.flush()
-            conversation.last_message_at = message.created_at
+            message = create_chat_message(db, conversation, user, data)
             db.commit()
-            return message_out(message)
+            return message_out(message, db)
 
     @app.post('/api/v1/conversations/{conversation_id}/read')
     def read_conversation(conversation_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
@@ -657,14 +626,12 @@ def create_app(settings: Settings | None = None):
                 raise HTTPException(403, '只能由对应的买家或卖家确认这一步')
             if state not in old_states or (item_state and item.status != item_state):
                 raise HTTPException(409, '当前交易状态不允许此操作，请刷新后重试')
-            if action in {'request', 'reserve'} and is_expired(item):
-                raise HTTPException(409, '商品已过期')
             if action in {'request', 'reserve'}:
                 assert_unblocked(db, conversation.buyer_id, conversation.seller_id)
             if action == 'reserve':
                 item.status = 'RESERVED'
             elif action == 'cancel' and state == 'RESERVED' and item.status == 'RESERVED':
-                item.status = 'ACTIVE' if not is_expired(item) else 'EXPIRED'
+                item.status = 'ACTIVE'
                 if item.status == 'ACTIVE':
                     jobs = matching.enqueue_item(db, item)
             elif action == 'sold':
@@ -705,7 +672,7 @@ def create_app(settings: Settings | None = None):
         if not mine:
             query = query.where(Item.status.in_(PUBLIC_ITEM_STATES))
         if on_sale:
-            query = query.where(Item.status == 'ACTIVE', unexpired(Item))
+            query = query.where(Item.status == 'ACTIVE')
         if category:
             query = query.where(Item.category == category)
         if campus and campus != '不限校区':
@@ -750,7 +717,7 @@ def create_app(settings: Settings | None = None):
         query = select(Item)
         if not settings.demo_mode:
             query = query.where(Item.seller_id.not_like('demo-%'))
-        query = query.where(Item.status == 'ACTIVE', unexpired(Item))
+        query = query.where(Item.status == 'ACTIVE')
         if parsed.category:
             query = query.where(Item.category == parsed.category)
         if parsed.campus and parsed.campus != '不限校区':
@@ -810,8 +777,7 @@ def create_app(settings: Settings | None = None):
     def item_detail(item_id: str, db: Session = Depends(get_db), user=Depends(current_user)):
         return item_out(get_item(db, item_id, user), db, user)
 
-    @app.post('/api/v1/uploads', status_code=201)
-    def upload(file: UploadFile = File(...), user=Depends(require_user), db: Session = Depends(get_db)):
+    def save_image(file, user, db, private=False):
         raw = file.file.read(6*1024*1024+1)
         if len(raw) > 6*1024*1024:
             raise HTTPException(413, '每张图片不得超过 6 MB')
@@ -827,18 +793,42 @@ def create_app(settings: Settings | None = None):
                     im = im.convert('RGB')
                     im.thumbnail((1600, 1600))
                     name = uid() + '.jpg'
-                    im.save(upload_dir / name, 'JPEG', quality=88)
+                    im.save((chat_upload_dir if private else upload_dir) / name, 'JPEG', quality=88)
         except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
             raise HTTPException(422, '请上传有效的 JPG、PNG 或 WebP 图片（不超过 2000 万像素）')
-        path = '/uploads/' + name
+        path = ('/api/v1/chat-images/' if private else '/uploads/') + name
         db.add(Upload(path=path, user_id=user.id))
         db.commit()
         return {'url': path}
 
+    @app.post('/api/v1/uploads', status_code=201)
+    def upload(file: UploadFile = File(...), user=Depends(require_user), db: Session = Depends(get_db)):
+        return save_image(file, user, db)
+
+    @app.post('/api/v1/chat-uploads', status_code=201)
+    def chat_upload(file: UploadFile = File(...), user=Depends(require_user), db: Session = Depends(get_db)):
+        return save_image(file, user, db, private=True)
+
+    @app.get('/api/v1/chat-images/{name}')
+    def chat_image(name: str, user=Depends(require_user), db: Session = Depends(get_db)):
+        path = '/api/v1/chat-images/' + name
+        upload = db.get(Upload, path)
+        attachment = db.get(ChatAttachment, path)
+        allowed = bool(upload and upload.user_id == user.id and not attachment)
+        if attachment:
+            message = db.get(ChatMessage, attachment.message_id)
+            conversation = db.get(Conversation, message.conversation_id)
+            allowed = not message.hidden_at and user.id in {conversation.buyer_id, conversation.seller_id}
+            if user.role == 'admin' and db.scalar(select(ChatReport.id).where(ChatReport.message_id == message.id).limit(1)):
+                allowed = True
+        if not allowed or not re.fullmatch(r'[0-9a-f-]{36}\.jpg', name) or not (chat_upload_dir / name).is_file():
+            raise HTTPException(404, '图片不存在或无权查看')
+        return FileResponse(chat_upload_dir / name, media_type='image/jpeg', headers={'Cache-Control': 'private, no-store'})
+
     def publish_item(data: ItemCreate, db: Session, user: User, draft_id: str | None = None):
         for path in data.images:
             image = db.get(Upload, path)
-            if not image or image.user_id != user.id:
+            if not path.startswith('/uploads/') or not image or image.user_id != user.id:
                 raise HTTPException(422, '只能使用自己上传的商品图片')
         if draft_id and not db.scalar(select(ItemDraft.id).where(ItemDraft.id == draft_id,
                                                                   ItemDraft.seller_id == user.id)):
@@ -853,10 +843,7 @@ def create_app(settings: Settings | None = None):
                     ItemDraft.seller_id == user.id).with_for_update())
                 if not draft:
                     raise HTTPException(404, '待发布商品不存在')
-                if 'validity_days' not in data.model_fields_set:
-                    item.validity_days = draft.validity_days
                 db.delete(draft)
-            renew(item)
             db.add(item)
             db.flush()
             jobs = matching.enqueue_item(db, item)
@@ -922,7 +909,7 @@ def create_app(settings: Settings | None = None):
                 raise HTTPException(422, '原始描述、校区、成色、标签和照片不能设为空')
             for path in values.get('images', []):
                 image = db.get(Upload, path)
-                if not image or image.user_id != user.id:
+                if not path.startswith('/uploads/') or not image or image.user_id != user.id:
                     raise HTTPException(422, '只能使用自己上传的商品图片')
             if 'price' in data.model_fields_set:
                 draft.price_cents = int(data.price * 100) if data.price is not None else None
@@ -956,19 +943,14 @@ def create_app(settings: Settings | None = None):
                 raise HTTPException(409, '已售出、审核隐藏或已撤回的商品不能编辑')
             values = data.model_dump(exclude_unset=True)
             if any(value is None for value in values.values()):
-                raise HTTPException(422, '商品字段不能设为空；无图片请使用空列表')
+                raise HTTPException(422, '商品字段不能设为 null')
             if 'images' in values:
                 for path in values['images']:
                     image = db.get(Upload, path)
-                    if not image or image.user_id != user.id:
+                    if not path.startswith('/uploads/') or not image or image.user_id != user.id:
                         raise HTTPException(422, '只能使用自己上传的商品图片')
             if 'price' in values:
                 item.price_cents = int(values.pop('price') * 100)
-            if 'validity_days' in values:
-                renew(item, values.pop('validity_days'))
-                if item.status == 'EXPIRED':
-                    validate_seller_status(db, item, 'ACTIVE')
-                    item.status = 'ACTIVE'
             for key, value in values.items():
                 setattr(item, key, value)
             item.embedding = embed(item.title + ' ' + item.description + ' ' + ' '.join(item.tags), settings)
@@ -993,30 +975,9 @@ def create_app(settings: Settings | None = None):
                 return item_out(item, db, user)
             sync_conversations(db, item, data.status, user.id)
             item.status = data.status
-            if data.status == 'ACTIVE':
-                renew(item)
             db.flush()
             jobs = matching.enqueue_item(db, item) if data.status == 'ACTIVE' else []
             log(db, user, 'item.status', item.id, data.status)
-            db.commit()
-        for job_id in jobs:
-            matching.run_or_wake(job_id)
-        return item_out(item, db, user)
-
-    @app.post('/api/v1/items/{item_id}/renew')
-    def renew_item(item_id: str, data: ExpiryUpdate | None = None,
-                   db: Session = Depends(get_db), user=Depends(require_user)):
-        with mutation_lock:
-            item = get_item(db, item_id, user, lock=True)
-            if item.seller_id != user.id:
-                raise HTTPException(403, '只能续期自己发布的商品')
-            if item.status not in {'ACTIVE', 'EXPIRED'}:
-                raise HTTPException(409, '只有在售或已过期的商品可以续期')
-            validate_seller_status(db, item, 'ACTIVE')
-            renew(item, data.validity_days if data else None)
-            item.status = 'ACTIVE'
-            jobs = matching.enqueue_item(db, item)
-            log(db, user, 'item.renew', item.id, str(item.validity_days))
             db.commit()
         for job_id in jobs:
             matching.run_or_wake(job_id)
@@ -1057,7 +1018,6 @@ def create_app(settings: Settings | None = None):
             draft = ItemDraft(seller_id=user.id, raw=item.description, title=item.title,
                               description=item.description, category=item.category, price_cents=item.price_cents,
                               campus=item.campus, condition_grade=item.condition_grade, tags=list(item.tags),
-                              validity_days=item.validity_days,
                               images=[path for path in item.images if (upload := db.get(Upload, path)) and upload.user_id == user.id])
             db.add(draft)
             db.flush()
@@ -1141,7 +1101,7 @@ def create_app(settings: Settings | None = None):
     @app.post('/api/v1/items/{item_id}/message-draft')
     def message_draft(item_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
         item = get_item(db, item_id)
-        if item.status != 'ACTIVE' or is_expired(item):
+        if item.status != 'ACTIVE':
             raise HTTPException(409, '该商品当前不在售，请查看其他商品')
         notice = db.scalar(select(Notification).where(Notification.item_id == item.id, Notification.buyer_id == user.id).order_by(Notification.created_at.desc()).limit(1))
         questions = notice.questions if notice else []
@@ -1171,10 +1131,8 @@ def create_app(settings: Settings | None = None):
                         max_price_cents=int(parsed.max_price*100) if parsed.max_price is not None else None,
                         campus=parsed.campus, keywords=parsed.keywords, condition_grade=parsed.condition_grade,
                         excluded_keywords=parsed.excluded_keywords, preferences=parsed.preferences,
-                        embedding=vector, embedding_model=model_name(settings), validity_days=data.validity_days)
-        renew(intent)
+                        embedding=vector, embedding_model=model_name(settings))
         with mutation_lock:
-            check_intent_limit(db, user)
             db.add(intent)
             db.flush()
             job_id = matching.enqueue(db, 'intent', intent.id)
@@ -1183,6 +1141,39 @@ def create_app(settings: Settings | None = None):
         matching.run_or_wake(job_id)
         matches = db.scalars(select(Item).join(Notification, Notification.item_id == Item.id).where(Notification.intent_id == intent.id, Notification.verdict != 'NO_MATCH')).all()
         return {'intent': intent_out(intent, db), 'matches': [item_out(i, db, user) for i in matches]}
+
+    def refresh_intent_matches(db, intent):
+        db.execute(delete(Notification).where(Notification.intent_id == intent.id))
+        db.execute(update(MatchJob).where(MatchJob.target_id == intent.id,
+                   MatchJob.status.in_(['PENDING', 'FAILED'])).values(status='DONE', error_code=''))
+        return matching.enqueue(db, 'intent', intent.id) if intent.status == 'ACTIVE' else None
+
+    @app.patch('/api/v1/intents/{intent_id}/details')
+    def edit_intent(intent_id: str, data: IntentCreate, db: Session = Depends(get_db), user=Depends(require_user)):
+        if not data.parsed.keywords:
+            raise HTTPException(422, '请至少填写一个具体的物品关键词')
+        current = owned_intent(db, intent_id, user)
+        if current.status == 'COMPLETED':
+            raise HTTPException(409, '已结束的需求不能编辑')
+        db.commit()
+        vector = embed(' '.join(data.parsed.keywords), settings)
+        with mutation_lock:
+            intent = owned_intent(db, intent_id, user)
+            if intent.status == 'COMPLETED':
+                raise HTTPException(409, '已结束的需求不能编辑')
+            parsed = data.parsed
+            intent.raw_query, intent.category, intent.campus = data.raw_query, parsed.category, parsed.campus
+            intent.max_price_cents = int(parsed.max_price * 100) if parsed.max_price is not None else None
+            intent.keywords, intent.excluded_keywords, intent.preferences = parsed.keywords, parsed.excluded_keywords, parsed.preferences
+            intent.condition_grade = parsed.condition_grade
+            intent.embedding, intent.embedding_model = vector, model_name(settings)
+            sync_wanted(db, intent, details=True)
+            job_id = refresh_intent_matches(db, intent)
+            log(db, user, 'intent.edit', intent.id)
+            db.commit()
+        if job_id:
+            matching.run_or_wake(job_id)
+        return intent_out(intent, db)
 
     @app.get('/api/v1/intents/my')
     def my_intents(db: Session = Depends(get_db), user=Depends(require_user)):
@@ -1202,6 +1193,7 @@ def create_app(settings: Settings | None = None):
                     raise HTTPException(422, '只能选择此任务曾匹配的商品')
             intent.status = 'COMPLETED'
             intent.completed_item_id = data.item_id
+            sync_wanted(db, intent)
             log(db, user, 'intent.fulfilled', intent.id, data.item_id or '')
             db.commit()
             return intent_out(intent, db)
@@ -1215,13 +1207,9 @@ def create_app(settings: Settings | None = None):
             if data.action == 'pause':
                 intent.status = 'PAUSED'
             else:
-                check_intent_limit(db, user, intent.id)
-                if data.action == 'renew':
-                    renew(intent, data.validity_days)
-                elif intent.expires_at <= now():
-                    raise HTTPException(409, '任务已过期，请先续期')
                 intent.status = 'ACTIVE'
                 job_id = matching.enqueue(db, 'intent', intent.id)
+            sync_wanted(db, intent)
             log(db, user, 'intent.'+data.action, intent.id)
             db.commit()
         if data.action != 'pause':
@@ -1232,8 +1220,8 @@ def create_app(settings: Settings | None = None):
     def retry_matching(intent_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
         with mutation_lock:
             intent = owned_intent(db, intent_id, user)
-            if intent.status != 'ACTIVE' or intent.expires_at <= now():
-                raise HTTPException(409, '请先恢复或续期代蹲任务')
+            if intent.status != 'ACTIVE':
+                raise HTTPException(409, '请先恢复代蹲任务')
             failed = db.scalars(select(MatchJob).where(MatchJob.target_id == intent_id, MatchJob.status == 'FAILED')).all()
             if not failed:
                 raise HTTPException(409, '没有需要重试的失败匹配任务')
@@ -1251,6 +1239,7 @@ def create_app(settings: Settings | None = None):
         with mutation_lock:
             intent = owned_intent(db, intent_id, user)
             intent.status = 'COMPLETED'
+            sync_wanted(db, intent)
             log(db, user, 'intent.complete', intent.id)
             db.commit()
         return {'ok': True}
@@ -1272,7 +1261,7 @@ def create_app(settings: Settings | None = None):
                            'evidence': [] if hidden else n.evidence, 'review_mode': n.review_mode,
                            'score_kind': 'embedding_similarity' if db.get(Intent, n.intent_id).embedding_model != 'local-keyword' else 'keyword_coverage',
                            'is_read': n.is_read, 'created_at': iso(n.created_at),
-                           'available': item.status == 'ACTIVE' and not is_expired(item)})
+                           'available': item.status == 'ACTIVE'})
         return result
 
     @app.patch('/api/v1/notifications/{notification_id}/read')
@@ -1283,6 +1272,31 @@ def create_app(settings: Settings | None = None):
         notice.is_read = True
         db.commit()
         return {'ok': True}
+
+    def wanted_out(wanted, db, user):
+        owner = bool(user and wanted.buyer_id == user.id)
+        intent = db.get(Intent, wanted.intent_id) if owner and wanted.intent_id else None
+        return {'id': wanted.id, 'title': wanted.title, 'description': wanted.description, 'category': wanted.category,
+                'budget': wanted.budget_cents / 100 if wanted.budget_cents is not None else None,
+                'campus': wanted.campus, 'buyer': user_out(db.get(User, wanted.buyer_id)),
+                'status': wanted.status, 'is_owner': owner, 'created_at': iso(wanted.created_at),
+                'expires_at': None, 'intent': intent_out(intent, db) if intent else None}
+
+    def owned_wanted(db, wanted_id, user):
+        wanted = db.scalar(select(Wanted).where(Wanted.id == wanted_id, Wanted.buyer_id == user.id).with_for_update())
+        if not wanted:
+            raise HTTPException(404, '求购不存在')
+        return wanted
+
+    def ensure_wanted_intent(db, wanted):
+        if wanted.intent_id:
+            return db.get(Intent, wanted.intent_id)
+        intent = Intent(buyer_id=wanted.buyer_id, status=wanted.status if wanted.status in {'ACTIVE', 'PAUSED'} else 'COMPLETED')
+        apply_wanted(wanted, intent, settings)
+        db.add(intent)
+        db.flush()
+        wanted.intent_id = intent.id
+        return intent
 
     @app.get('/api/v1/wanted/')
     def wanted_list(mine: bool = False, q: str = Query('', max_length=120),
@@ -1295,102 +1309,101 @@ def create_app(settings: Settings | None = None):
                 raise HTTPException(401, '请先登录')
             query = query.where(Wanted.buyer_id == user.id)
         else:
-            query = query.where(Wanted.status == 'ACTIVE', unexpired(Wanted))
+            query = query.where(Wanted.status == 'ACTIVE')
         query = query.where(*keyword_filters(q, Wanted.title, Wanted.description))
         rows = db.scalars(query.order_by(Wanted.created_at.desc()).limit(100))
         return [wanted_out(w, db, user) for w in rows]
 
     @app.post('/api/v1/wanted/', status_code=201)
     def wanted_create(data: WantedCreate, db: Session = Depends(get_db), user=Depends(require_user)):
-        w = Wanted(**data.model_dump(exclude={'budget', 'enable_watch', 'watch_validity_days'}),
-                   buyer_id=user.id, budget_cents=int(data.budget*100))
-        renew(w)
-        db.commit()
-        prepared = prepare_watch(w) if data.enable_watch else None
-        job_id = None
         with mutation_lock:
-            if prepared:
-                check_intent_limit(db, user)
-            db.add(w)
+            db.scalar(select(User).where(User.id == user.id).with_for_update())
+            intent = owned_intent(db, data.intent_id, user) if data.intent_id else None
+            if intent and (intent.status == 'COMPLETED' or db.scalar(select(Wanted.id).where(Wanted.intent_id == intent.id))):
+                raise HTTPException(409, '该需求已结束或已发布求购，请查看我的求购')
+            wanted = Wanted(**data.model_dump(exclude={'budget', 'intent_id'}), buyer_id=user.id,
+                            budget_cents=int(data.budget * 100) if data.budget is not None else None,
+                            status='ACTIVE')
+            db.add(wanted)
+            previous_conditions = intent_data(intent) if intent else None
+            if intent:
+                wanted.intent_id = intent.id
+                intent.status = 'ACTIVE'
+                apply_wanted(wanted, intent, settings, preserve_conditions=True)
+            else:
+                intent = ensure_wanted_intent(db, wanted)
             db.flush()
-            if prepared:
-                job_id = add_wanted_watch(db, w, user, *prepared, settings, data.watch_validity_days, matching)
-            log(db, user, 'wanted.create', w.id)
+            changed = previous_conditions is not None and previous_conditions != intent_data(intent)
+            job_id = refresh_intent_matches(db, intent) if changed else matching.enqueue(db, 'intent', intent.id) if intent.status == 'ACTIVE' else None
+            log(db, user, 'wanted.create', wanted.id)
             db.commit()
         if job_id:
             matching.run_or_wake(job_id)
-        return wanted_out(w, db, user)
-
-    @app.post('/api/v1/wanted/{wanted_id}/watch')
-    def wanted_start_watch(wanted_id: str, data: WantedWatchCreate | None = None,
-                           db: Session = Depends(get_db), user=Depends(require_user)):
-        w = owned_wanted(db, wanted_id, user)
-        if linked_watch(db, w, user):
-            return wanted_out(w, db, user)
-        if w.status != 'ACTIVE' or is_expired(w):
-            raise HTTPException(409, '请先续期或重新开启求购，再创建代蹲')
-        fields = ('title', 'description', 'category', 'budget_cents', 'campus')
-        snapshot = tuple(getattr(w, key) for key in fields)
-        db.commit()
-        prepared = prepare_watch(w)
-        with mutation_lock:
-            db.scalar(select(User).where(User.id == user.id).with_for_update())
-            w = owned_wanted(db, wanted_id, user, lock=True)
-            if linked_watch(db, w, user):
-                return wanted_out(w, db, user)
-            if w.status != 'ACTIVE' or is_expired(w) or snapshot != tuple(getattr(w, key) for key in fields):
-                raise HTTPException(409, '求购已更新，请刷新后重新创建代蹲')
-            check_intent_limit(db, user)
-            job_id = add_wanted_watch(db, w, user, *prepared, settings,
-                                      data.validity_days if data else 14, matching)
-            db.commit()
-        matching.run_or_wake(job_id)
-        return wanted_out(w, db, user)
+        return wanted_out(wanted, db, user)
 
     @app.patch('/api/v1/wanted/{wanted_id}')
     def wanted_edit(wanted_id: str, data: WantedUpdate, db: Session = Depends(get_db), user=Depends(require_user)):
         with mutation_lock:
-            w = owned_wanted(db, wanted_id, user, lock=True)
+            wanted = owned_wanted(db, wanted_id, user)
+            if wanted.status not in {'ACTIVE', 'PAUSED'}:
+                raise HTTPException(409, '请先重新发布已结束的求购')
             values = data.model_dump(exclude_unset=True)
-            if any(value is None for value in values.values()):
-                raise HTTPException(422, '求购字段不能设为空')
+            if any(values.get(key) is None for key in ('title', 'description', 'campus') if key in values):
+                raise HTTPException(422, '标题、描述和校区不能设为 null')
+            text_changed = any(key in values and values[key] != getattr(wanted, key) for key in ('title', 'description'))
             if 'budget' in values:
-                w.budget_cents = int(values.pop('budget') * 100)
-            if 'validity_days' in values:
-                renew(w, values.pop('validity_days'))
-                if w.status == 'EXPIRED':
-                    w.status = 'ACTIVE'
+                budget = values.pop('budget')
+                wanted.budget_cents = int(budget * 100) if budget is not None else None
             for key, value in values.items():
-                setattr(w, key, value)
-            log(db, user, 'wanted.edit', w.id)
+                setattr(wanted, key, value)
+            if len(wanted_query(wanted)) > 2500:
+                raise HTTPException(422, '求购标题与描述合计不能超过 2500 字')
+            intent = ensure_wanted_intent(db, wanted)
+            apply_wanted(wanted, intent, settings, preserve_conditions=not text_changed)
+            job_id = refresh_intent_matches(db, intent)
+            log(db, user, 'wanted.edit', wanted.id)
             db.commit()
-        return {'ok': True}
+        if job_id:
+            matching.run_or_wake(job_id)
+        return wanted_out(wanted, db, user)
+
+    @app.post('/api/v1/wanted/{wanted_id}/watch')
+    def wanted_watch(wanted_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            wanted = owned_wanted(db, wanted_id, user)
+            if wanted.status not in {'ACTIVE', 'PAUSED'}:
+                raise HTTPException(409, '请先重新发布求购')
+            intent = ensure_wanted_intent(db, wanted)
+            job_id = matching.enqueue(db, 'intent', intent.id) if intent.status == 'ACTIVE' else None
+            db.commit()
+        if job_id:
+            matching.run_or_wake(job_id)
+        return wanted_out(wanted, db, user)
 
     @app.post('/api/v1/wanted/{wanted_id}/renew')
-    def wanted_renew(wanted_id: str, data: ExpiryUpdate | None = None,
+    def wanted_renew(wanted_id: str,
                      db: Session = Depends(get_db), user=Depends(require_user)):
         with mutation_lock:
-            w = owned_wanted(db, wanted_id, user, lock=True)
-            w.status = 'ACTIVE'
-            renew(w, data.validity_days if data else None)
-            log(db, user, 'wanted.renew', w.id)
+            wanted = owned_wanted(db, wanted_id, user)
+            if wanted.status == 'ACTIVE':
+                raise HTTPException(409, '求购仍在展示中')
+            wanted.status = 'ACTIVE'
+            intent = ensure_wanted_intent(db, wanted)
+            intent.status, intent.completed_item_id = 'ACTIVE', None
+            job_id = matching.enqueue(db, 'intent', intent.id)
+            log(db, user, 'wanted.reopen', wanted.id)
             db.commit()
-        return {'ok': True}
+        matching.run_or_wake(job_id)
+        return wanted_out(wanted, db, user)
 
     @app.delete('/api/v1/wanted/{wanted_id}')
-    def wanted_close(wanted_id: str, stop_watch: bool = False,
-                     db: Session = Depends(get_db), user=Depends(require_user)):
+    def wanted_close(wanted_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
         with mutation_lock:
-            db.scalar(select(User).where(User.id == user.id).with_for_update())
-            w = owned_wanted(db, wanted_id, user, lock=True)
-            task = linked_watch(db, w, user) if stop_watch else None
-            if task:
-                task = db.scalar(select(Intent).where(Intent.id == task.id).with_for_update()
-                                 .execution_options(populate_existing=True))
-                task.status = 'COMPLETED'
-                log(db, user, 'intent.complete', task.id)
-            w.status = 'COMPLETED'
-            log(db, user, 'wanted.close', w.id)
+            wanted = owned_wanted(db, wanted_id, user)
+            wanted.status = 'COMPLETED'
+            intent = ensure_wanted_intent(db, wanted)
+            intent.status = 'COMPLETED'
+            log(db, user, 'wanted.complete', wanted.id)
             db.commit()
         return {'ok': True}
 
@@ -1423,6 +1436,7 @@ def create_app(settings: Settings | None = None):
             result.append({'id': report.id, 'reason': report.reason, 'status': report.status,
                            'created_at': iso(report.created_at), 'item_title': db.get(Item, conversation.item_id).title,
                            'message_id': message.id, 'message_body': message.body,
+                           'message_images': message_images(message, db),
                            'sender': user_out(db.get(User, message.sender_id))})
         return result
 
@@ -1459,7 +1473,7 @@ def create_app(settings: Settings | None = None):
             elif data.action == 'restore':
                 if item.status != 'BANNED':
                     raise HTTPException(409, '仅可恢复审核隐藏的商品')
-                item.status = 'ACTIVE' if not is_expired(item) else 'EXPIRED'
+                item.status = 'ACTIVE'
             report.status = {'hide': 'HIDDEN', 'restore': 'RESTORED', 'dismiss': 'DISMISSED'}[data.action]
             log(db, user, 'admin.'+data.action, item.id, data.note)
             db.flush()

@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from sqlalchemy import delete, select
 
-from .models import ChatMessage, ChatReport, now
+from .models import ChatAttachment, ChatMessage, ChatReport, Upload, now
 
 
 def prune_chat(factory, mutation_lock, retention_days: int):
@@ -12,6 +12,8 @@ def prune_chat(factory, mutation_lock, retention_days: int):
     with mutation_lock, factory() as db:
         db.execute(delete(ChatReport).where(ChatReport.status != 'OPEN', ChatReport.reviewed_at < report_cutoff))
         protected = select(ChatReport.message_id)
+        expired = select(ChatMessage.id).where(ChatMessage.created_at < message_cutoff, ChatMessage.id.not_in(protected))
+        db.execute(delete(Upload).where(Upload.path.in_(select(ChatAttachment.path).where(ChatAttachment.message_id.in_(expired)))))
         db.execute(delete(ChatMessage).where(ChatMessage.created_at < message_cutoff,
                    ChatMessage.id.not_in(protected)))
         db.commit()

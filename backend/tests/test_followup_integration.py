@@ -3,11 +3,11 @@ from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 
 from app.config import Settings
 from app.main import create_app
-from app.models import Conversation, Item, LoginSession, User, now
+from app.models import Base, Conversation, Intent, Item, LoginSession, User, Wanted, now
 from conftest import login
 
 
@@ -96,7 +96,6 @@ def test_followup_tables_and_email_preference_upgrade_idempotently(tmp_path):
     with engine.begin() as connection:
         connection.execute(text('DROP TABLE chat_email_receipts'))
         connection.execute(text('DROP TABLE chat_email_queue'))
-        connection.execute(text('DROP TABLE wanted_watches'))
         connection.execute(text('ALTER TABLE users DROP COLUMN email_notifications'))
     engine.dispose()
     for _ in range(2):
@@ -105,4 +104,46 @@ def test_followup_tables_and_email_preference_upgrade_idempotently(tmp_path):
             assert login(client)['email_notifications'] is False
             rows = client.get(f'/api/v1/conversations/{conversation_id}/messages').json()['messages']
             assert rows[0]['body'] == '旧聊天保留'
-            assert {'chat_email_receipts', 'chat_email_queue', 'wanted_watches'} <= set(inspect(app.state.engine).get_table_names())
+            assert {'chat_email_receipts', 'chat_email_queue'} <= set(inspect(app.state.engine).get_table_names())
+
+
+def test_local_link_migrates_to_shared_need_without_duplicate_or_lost_history(tmp_path):
+    from sqlalchemy.orm import Session
+    url = f'sqlite:///{tmp_path / "local-linked.db"}'
+    engine = create_engine(url)
+    @event.listens_for(engine, 'connect')
+    def foreign_keys(connection, _):
+        connection.execute('PRAGMA foreign_keys=ON')
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        db.add(User(id='local-owner', nickname='本地用户', campus='万柳学区'))
+        db.flush()
+        db.add(Intent(id='existing-watch', buyer_id='local-owner', raw_query='鼠标', keywords=['鼠标'], status='PAUSED'))
+        db.add(Item(id='withdrawn-item', seller_id='local-owner', title='已撤回商品', description='保持撤回',
+                    category='数码与影音', price_cents=100, campus='万柳学区', status='WITHDRAWN'))
+        db.commit()
+    with engine.begin() as conn:
+        conn.execute(text('DROP TABLE wanted_posts'))
+        conn.execute(text('''CREATE TABLE wanted_posts (
+            id VARCHAR(36) PRIMARY KEY, buyer_id VARCHAR(36) NOT NULL REFERENCES users(id),
+            title VARCHAR(120) NOT NULL, description TEXT NOT NULL, category VARCHAR(30) NOT NULL,
+            budget_cents INTEGER NOT NULL, campus VARCHAR(30) NOT NULL, status VARCHAR(20) NOT NULL,
+            created_at TIMESTAMP NOT NULL, expires_at TIMESTAMP NOT NULL, validity_days INTEGER NOT NULL DEFAULT 7)'''))
+        conn.execute(text("INSERT INTO wanted_posts VALUES ('linked-post', 'local-owner', '求购鼠标', '万柳面交', '数码与影音', 30000, '万柳学区', 'ACTIVE', '2000-01-01', '2000-01-08', 7)"))
+        conn.execute(text('''CREATE TABLE wanted_watches (
+            wanted_id VARCHAR(36) PRIMARY KEY REFERENCES wanted_posts(id),
+            intent_id VARCHAR(36) NOT NULL UNIQUE REFERENCES buyer_intents(id))'''))
+        conn.execute(text("INSERT INTO wanted_watches VALUES ('linked-post', 'existing-watch')"))
+    engine.dispose()
+    settings = Settings(database_url=url, data_dir=tmp_path, demo_mode=False, ai_mode='local')
+    for _ in range(2):
+        app = create_app(settings)
+        event.listen(app.state.engine, 'connect', foreign_keys)
+        with TestClient(app):
+            with app.state.session_factory() as db:
+                wanted = db.get(Wanted, 'linked-post')
+                assert wanted.intent_id == 'existing-watch' and wanted.status == 'PAUSED'
+                assert db.query(Intent).count() == 1
+                assert db.get(Intent, 'existing-watch').keywords == ['鼠标']
+                assert db.get(Item, 'withdrawn-item').status == 'WITHDRAWN'
+            assert 'wanted_watches' not in inspect(app.state.engine).get_table_names()

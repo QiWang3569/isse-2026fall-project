@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
@@ -82,6 +82,13 @@ class ChatMessage(Base):
     __table_args__ = (Index('idx_chat_messages_conversation', 'conversation_id', 'created_at'),)
 
 
+class ChatAttachment(Base):
+    __tablename__ = 'chat_attachments'
+    path: Mapped[str] = mapped_column(ForeignKey('uploads.path', ondelete='CASCADE'), primary_key=True)
+    message_id: Mapped[str] = mapped_column(ForeignKey('chat_messages.id', ondelete='CASCADE'), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class UserBlock(Base):
     __tablename__ = 'user_blocks'
     blocker_id: Mapped[str] = mapped_column(ForeignKey('users.id'), primary_key=True)
@@ -119,8 +126,6 @@ class Item(Base):
     embedding: Mapped[list | None] = mapped_column(JSON().with_variant(Vector(1536), 'postgresql'), nullable=True)
     embedding_model: Mapped[str] = mapped_column(String(100), default='local-keyword')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
-    validity_days: Mapped[int] = mapped_column(Integer, default=14, server_default='14')
-    expires_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: now() + timedelta(days=14))
     __table_args__ = (Index('idx_items_filter', 'status', 'category', 'campus', 'price_cents'),)
 
 
@@ -138,7 +143,6 @@ class ItemDraft(Base):
     tags: Mapped[list] = mapped_column(JSON, default=list)
     images: Mapped[list] = mapped_column(JSON, default=list)
     clarification: Mapped[str | None] = mapped_column(Text, nullable=True)
-    validity_days: Mapped[int] = mapped_column(Integer, default=14, server_default='14')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     __table_args__ = (Index('idx_item_drafts_seller', 'seller_id', 'created_at'),)
@@ -161,9 +165,7 @@ class Intent(Base):
     embedding: Mapped[list | None] = mapped_column(JSON().with_variant(Vector(1536), 'postgresql'), nullable=True)
     embedding_model: Mapped[str] = mapped_column(String(100), default='local-keyword')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
-    validity_days: Mapped[int] = mapped_column(Integer, default=14, server_default='14')
-    expires_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: now() + timedelta(days=14))
-    __table_args__ = (Index('idx_intents_active', 'status', 'expires_at'),)
+    __table_args__ = (Index('idx_intents_active', 'status'),)
 
 
 class SaleFeedback(Base):
@@ -237,13 +239,13 @@ class Wanted(Base):
     buyer_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
     title: Mapped[str] = mapped_column(String(120))
     description: Mapped[str] = mapped_column(Text)
-    category: Mapped[str] = mapped_column(String(30))
-    budget_cents: Mapped[int] = mapped_column(Integer)
+    category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    budget_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     campus: Mapped[str] = mapped_column(String(30))
     status: Mapped[str] = mapped_column(String(20), default='ACTIVE')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
-    validity_days: Mapped[int] = mapped_column(Integer, default=7, server_default='7')
-    expires_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: now() + timedelta(days=7))
+    intent_id: Mapped[str | None] = mapped_column(ForeignKey('buyer_intents.id'), nullable=True)
+    __table_args__ = (Index('uq_wanted_intent', 'intent_id', unique=True),)
 
 
 class Report(Base):

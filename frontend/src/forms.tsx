@@ -1,22 +1,24 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, Check, ImagePlus, Sparkles, Trash2, X } from "lucide-react";
-import { api, type Meta, type Parsed, type ParsedItem, type Item, type ItemDraft, type Wanted } from "./api";
-import { expiryText } from "./api";
-import { ValiditySelect } from "./ValiditySelect";
+import { api, type Meta, type Parsed, type ParsedItem, type Item, type ItemDraft, type Wanted, type Intent } from "./api";
 
 type Common = { meta: Meta; onDone: () => void };
 
 export function IntentForm({
   meta,
   initial,
+  editingIntent,
   onDone,
-}: Common & { initial: string }) {
-  const [query, setQuery] = useState(initial);
-  const [validityDays, setValidityDays] = useState(14);
-  const [parsed, setParsed] = useState<Parsed | null>(null);
-  const [keywords, setKeywords] = useState("");
-  const [excluded, setExcluded] = useState("");
-  const [preferences, setPreferences] = useState("");
+}: Common & { initial: string; editingIntent?: Intent | null }) {
+  const [query, setQuery] = useState(editingIntent?.raw_query || initial);
+  const [parsed, setParsed] = useState<Parsed | null>(editingIntent ? {
+    category: editingIntent.category, max_price: editingIntent.max_price, campus: editingIntent.campus,
+    keywords: editingIntent.keywords, excluded_keywords: editingIntent.excluded_keywords,
+    preferences: editingIntent.preferences, condition_grade: editingIntent.condition_grade, clarification: null,
+  } : null);
+  const [keywords, setKeywords] = useState(editingIntent?.keywords.join("，") || "");
+  const [excluded, setExcluded] = useState(editingIntent?.excluded_keywords.join("，") || "");
+  const [preferences, setPreferences] = useState(editingIntent?.preferences.join("，") || "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function submit(e: FormEvent) {
@@ -33,9 +35,8 @@ export function IntentForm({
         setExcluded(result.parsed.excluded_keywords.join("，"));
         setPreferences(result.parsed.preferences.join("，"));
       } else {
-        await api("/intents/", "POST", {
+        await api(editingIntent ? `/intents/${editingIntent.id}/details` : "/intents/", editingIntent ? "PATCH" : "POST", {
           raw_query: query,
-          validity_days: validityDays,
           parsed: {
             ...parsed,
             keywords: keywords.split(/[，,\s]+/).filter(Boolean),
@@ -64,7 +65,7 @@ export function IntentForm({
         <textarea
           required
           minLength={2}
-          maxLength={500}
+          maxLength={2500}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -178,9 +179,8 @@ export function IntentForm({
           </label>
         </div>
       )}
-      <ValiditySelect label="代蹲时长" value={validityDays} onChange={setValidityDays} allowUnlimited={false} />
       <p className="hint">
-        每人最多 5 个活跃任务，可选择 7、14 或 30 天，随时暂停、续期或结束。
+        持续替你留意，直到你暂停或结束。{editingIntent?.wanted_id && "修改条件会同步更新求购看板。"}
         {meta.ai_mode === "local" &&
           "当前演示使用关键词规则解析，请确认筛选条件。"}
         {meta.ai_mode === "remote" &&
@@ -192,7 +192,7 @@ export function IntentForm({
         </p>
       )}
       <button className="button primary full" disabled={busy}>
-        {busy ? "正在处理…" : parsed ? "确认条件，开始代蹲" : "理解我的需求"}
+        {busy ? "正在处理…" : parsed ? editingIntent ? "保存需求与条件" : "确认条件，开始代蹲" : "理解我的需求"}
         {!busy && <ArrowRight size={17} />}
       </button>
     </form>
@@ -285,7 +285,7 @@ export function PublishWorkspace({ meta, onDone, onDraftPublished }: Common & { 
         <textarea rows={8} maxLength={10000} value={source} onChange={(e) => setSource(e.target.value)}
           placeholder={"九成新罗技静音鼠标，50 元，万柳面交\n高数教材一本，20 元，燕园面交"} />
       </label>
-      <p className="hint">已填写 {lines.length} 件。导入后请逐件检查识别结果，可补充真实照片后发布。最多保存 50 件待发布商品。</p>
+      <p className="hint">已填写 {lines.length} 件。导入后请逐件检查识别结果，可以添加照片，再选择发布。最多保存 50 件待发布商品。</p>
       <button type="button" className="button primary full" disabled={busy || !lines.length} onClick={() => void importLines()}>
         {busy ? "正在逐件识别…" : "导入待发布商品"}
       </button>
@@ -298,7 +298,7 @@ export function PublishWorkspace({ meta, onDone, onDraftPublished }: Common & { 
             <span className="draft-status">待发布</span>
             <h3>{draft.title || "待补充标题"}</h3>
             <p>{draft.raw}</p>
-            <small>{draft.price == null ? "待补充价格" : `¥${draft.price}`} · {draft.images.length ? `已上传 ${draft.images.length} 张照片` : "暂无图片（可选）"}</small>
+            <small>{draft.price == null ? "待补充价格" : `¥${draft.price}`} · {draft.images.length ? `已上传 ${draft.images.length} 张照片` : "暂未添加照片（可选）"}</small>
             {draft.clarification && <small>请核对：{draft.clarification}</small>}
           </div>
           <div className="draft-card-actions">
@@ -334,13 +334,11 @@ export function PublishForm({
   const [campus, setCampus] = useState(editingItem?.campus || draft?.campus || prefill?.campus || meta.campuses[0]);
   const [condition, setCondition] = useState(editingItem?.condition_grade || draft?.condition_grade || "95新");
   const [tags, setTags] = useState((editingItem?.tags || draft?.tags || []).join("，"));
-  const [validityDays, setValidityDays] = useState(editingItem?.validity_days ?? draft?.validity_days ?? 14);
 
   const payload = () => ({
     title: title.trim(), description: description.trim(), category,
     price: price === "" ? null : Number(price), campus,
     condition_grade: condition, tags: tags.split(/[，,\s]+/).filter(Boolean), images,
-    ...(!editingItem || validityDays !== editingItem.validity_days ? { validity_days: validityDays } : {}),
   });
 
   async function saveDraft() {
@@ -445,7 +443,7 @@ export function PublishForm({
       <div className="form-callout">
         <Sparkles size={22} />
         <p>
-          {draft ? "这件商品还未公开。请核对商品信息，可补充照片，再保存草稿或发布。" : "把要卖的东西用一句话说出来，点“智能识别并填充”，核对信息后即可发布，也可补充照片。"}
+          {draft ? "这件商品还未公开。请核对识别结果，再保存草稿或发布，照片可稍后补充。" : "懒人模式：把要卖的东西用一句话说出来，点“智能识别并填充”，信息会自动填好，确认信息后即可发布，照片选填。"}
         </p>
       </div>
       <label>
@@ -469,7 +467,7 @@ export function PublishForm({
       </button>
       <div>
         <span className="field-title">
-          商品照片 <small>可选，0–3 张 · JPG / PNG / WebP · 每张不超过 6 MB</small>
+          商品照片 <small>选填，最多 3 张 · JPG / PNG / WebP · 每张不超过 6 MB</small>
         </span>
         <div className="upload-row">
           {images.map((url) => (
@@ -583,10 +581,9 @@ export function PublishForm({
           placeholder="例如：鼠标，静音，无线"
         />
       </label>
-      <ValiditySelect value={validityDays} onChange={setValidityDays} />
-      <p className="hint">{editingItem
-        ? `当前${expiryText(editingItem.expires_at)}。修改有效期后从保存时重新计算；只修改内容不会续期。`
-        : "有效期从发布时开始计算。过期后停止公开展示，聊天和交易记录仍会保留。"}</p>
+      <p className="hint">
+        商品持续展示，成交后记得标记“已售出”。照片可以稍后补充。
+      </p>
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -610,12 +607,10 @@ export function WantedForm({
   onDone,
   initial,
   editingWanted,
-}: Common & { initial: string; editingWanted?: Wanted | null }) {
+  initialIntent,
+}: Common & { initial: string; editingWanted?: Wanted | null; initialIntent?: Intent | null }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [validityDays, setValidityDays] = useState(editingWanted?.validity_days ?? 7);
-  const [enableWatch, setEnableWatch] = useState(false);
-  const [watchValidityDays, setWatchValidityDays] = useState(14);
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
@@ -625,11 +620,10 @@ export function WantedForm({
       const payload = {
         title: data.get("title"),
         description: data.get("description"),
-        category: data.get("category"),
-        budget: Number(data.get("budget")),
+        category: data.get("category") || null,
+        budget: data.get("budget") === "" ? null : Number(data.get("budget")),
         campus: data.get("campus"),
-        ...(!editingWanted || validityDays !== editingWanted.validity_days ? { validity_days: validityDays } : {}),
-        ...(!editingWanted ? { enable_watch: enableWatch, watch_validity_days: watchValidityDays } : {}),
+        ...(!editingWanted && initialIntent ? { intent_id: initialIntent.id } : {}),
       };
       if (editingWanted) {
         await api(`/wanted/${editingWanted.id}`, "PATCH", payload);
@@ -646,7 +640,7 @@ export function WantedForm({
   return (
     <form className="stack-form" onSubmit={submit}>
       <p className="muted">
-        把需要的物品告诉同学们，也许它正好在某个人的抽屉里。
+        发布到求购看板的同时，燕渡会自动替你代蹲。已有代蹲会沿用原来的匹配记录。
       </p>
       <label>
         你想求购什么？
@@ -655,7 +649,7 @@ export function WantedForm({
           required
           minLength={2}
           maxLength={120}
-          defaultValue={editingWanted?.title || initial}
+          defaultValue={editingWanted?.title || initialIntent?.raw_query.split("\n")[0].slice(0, 120) || initial}
           placeholder="求一本离散数学教材"
         />
       </label>
@@ -663,18 +657,17 @@ export function WantedForm({
         具体要求
         <textarea
           name="description"
-          required
-          minLength={5}
-          maxLength={1000}
+          maxLength={2500}
           rows={3}
-          defaultValue={editingWanted?.description}
+          defaultValue={editingWanted?.description ?? initialIntent?.raw_query}
           placeholder="型号、版本、能接受的成色、交接时间…"
         />
       </label>
       <div className="form-grid">
         <label>
           物品分类
-          <select name="category" defaultValue={editingWanted?.category}>
+          <select name="category" defaultValue={editingWanted?.category || initialIntent?.category || ""}>
+            <option value="">不限分类</option>
             {meta.categories.map((c) => (
               <option key={c}>{c}</option>
             ))}
@@ -685,34 +678,23 @@ export function WantedForm({
           <input
             name="budget"
             type="number"
-            required
             min="0"
             max="999999"
             step="0.01"
-            defaultValue={editingWanted ? String(editingWanted.budget) : undefined}
+            defaultValue={editingWanted?.budget ?? initialIntent?.max_price ?? ""}
+            placeholder="不限预算"
           />
         </label>
         <label>
           交接校区
-          <select name="campus" defaultValue={editingWanted?.campus}>
+          <select name="campus" defaultValue={editingWanted?.campus || initialIntent?.campus || "不限校区"}>
             {meta.campuses.map((c) => (
               <option key={c}>{c}</option>
             ))}
           </select>
         </label>
       </div>
-      <ValiditySelect value={validityDays} onChange={setValidityDays} />
-      <p className="hint">{editingWanted
-        ? `当前${expiryText(editingWanted.expires_at)}。修改有效期后从保存时重新计算；只修改内容不会续期。`
-        : "到期后停止展示，找到后也可以提前结束。"}</p>
-      {!editingWanted && <>
-        <label className="check-label"><input type="checkbox" checked={enableWatch} onChange={(event) => setEnableWatch(event.target.checked)} />有匹配商品时提醒我</label>
-        {enableWatch && <>
-          <ValiditySelect label="代蹲时长" value={watchValidityDays} onChange={setWatchValidityDays} allowUnlimited={false} />
-          <p className="hint">使用本次求购的关键词、预算和校区创建代蹲，占用一个活跃任务名额。提醒会显示在站内通知中。</p>
-        </>}
-      </>}
-      {editingWanted?.linked_intent_id && <p className="hint">此求购已关联代蹲。代蹲使用创建时的条件，修改求购不会同步修改代蹲。</p>}
+      <p className="hint">求购持续展示；编辑条件、暂停或找到商品后，求购与代蹲会一起更新。</p>
       {error && (
         <p className="form-error" role="alert">
           {error}

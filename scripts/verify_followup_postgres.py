@@ -30,14 +30,13 @@ from app.config import Settings
 from app.database import prepare_database
 from app.models import ChatMessage, Conversation, Intent, Item, ItemDraft, User, Wanted, now
 from app.services import seed
-from app.wanted_watch import WantedWatch
 
 
 IMAGE = 'pgvector/pgvector:pg16'
 WANTED = {'title': '求购静音鼠标', 'description': '需要静音鼠标，用于自习室学习',
           'category': '数码与影音', 'budget': 300, 'campus': '万柳学区'}
 ITEM = {'title': '长期出售静音鼠标', 'description': '静音无线鼠标，功能正常，万柳面交。',
-        'category': '数码与影音', 'price': 100, 'campus': '万柳学区', 'validity_days': 0}
+        'category': '数码与影音', 'price': 100, 'campus': '万柳学区'}
 
 
 def docker(*args):
@@ -56,80 +55,76 @@ def login(client, profile='buyer'):
 
 def legacy_upgrade(engine, factory):
     prepare_database(engine)
-    deadline = now() + timedelta(days=3)
     with factory.begin() as db:
         seed(db)
     with factory.begin() as db:
-        db.get(Item, 'sample-1').expires_at = deadline
         db.add(Intent(id='legacy-intent', buyer_id='demo-buyer', raw_query='鼠标',
-                      keywords=['鼠标'], status='PAUSED', expires_at=deadline))
+                      keywords=['鼠标'], status='PAUSED'))
         db.add(Wanted(id='legacy-wanted', buyer_id='demo-buyer', title='旧求购鼠标', description='求购静音鼠标',
-                      category='数码与影音', budget_cents=5000, campus='万柳学区', expires_at=deadline))
+                      category='数码与影音', budget_cents=5000, campus='万柳学区'))
         db.add(ItemDraft(id='legacy-draft', seller_id='demo-seller', raw='旧草稿静音鼠标'))
-    # Remove only columns and tables in this newly created disposable database.
+    # Simulate the old expiry schema and local optional wanted-watch association.
     with engine.begin() as connection:
-        for table in ('chat_email_receipts', 'chat_email_queue', 'wanted_watches'):
+        for table in ('chat_email_receipts', 'chat_email_queue'):
             connection.execute(text(f'DROP TABLE {table}'))
-        for table in ('items', 'item_drafts', 'buyer_intents', 'wanted_posts'):
-            connection.execute(text(f'ALTER TABLE {table} DROP COLUMN validity_days'))
+        for table in ('items', 'buyer_intents', 'wanted_posts'):
+            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN expires_at TIMESTAMP NOT NULL DEFAULT '2000-01-01'"))
+        connection.execute(text("UPDATE items SET status='EXPIRED' WHERE id='sample-1'"))
+        connection.execute(text('DROP INDEX idx_intents_active'))
+        connection.execute(text('CREATE INDEX idx_intents_active ON buyer_intents(status, expires_at)'))
+        connection.execute(text('ALTER TABLE wanted_posts DROP COLUMN intent_id'))
+        for column in ('category', 'budget_cents'):
+            connection.execute(text(f'ALTER TABLE wanted_posts ALTER COLUMN {column} SET NOT NULL'))
+        connection.execute(text('CREATE TABLE wanted_watches (wanted_id VARCHAR(36) PRIMARY KEY REFERENCES wanted_posts(id), intent_id VARCHAR(36) UNIQUE NOT NULL REFERENCES buyer_intents(id))'))
+        connection.execute(text("INSERT INTO wanted_watches VALUES ('legacy-wanted', 'legacy-intent')"))
         connection.execute(text('ALTER TABLE users DROP COLUMN email_notifications'))
     for _ in range(2):
         prepare_database(engine)
         with factory() as db:
-            for model, identity, days in ((Item, 'sample-1', 14), (Intent, 'legacy-intent', 14),
-                                          (Wanted, 'legacy-wanted', 7)):
-                row = db.get(model, identity)
-                assert row.expires_at == deadline and row.validity_days == days
-            assert db.get(ItemDraft, 'legacy-draft').validity_days == 14
+            assert db.get(Item, 'sample-1').status == 'ACTIVE'
+            wanted = db.get(Wanted, 'legacy-wanted')
+            assert wanted.intent_id == 'legacy-intent' and wanted.status == 'PAUSED'
+            assert db.get(Intent, 'legacy-intent').keywords == ['鼠标']
+            assert db.get(ItemDraft, 'legacy-draft').raw == '旧草稿静音鼠标'
             assert db.get(User, 'demo-buyer').email_notifications is False
-        assert {'wanted_watches', 'chat_email_queue', 'chat_email_receipts'} <= set(inspect(engine).get_table_names())
+        tables = set(inspect(engine).get_table_names())
+        assert {'chat_email_queue', 'chat_email_receipts'} <= tables and 'wanted_watches' not in tables
+        for table in ('items', 'buyer_intents', 'wanted_posts'):
+            assert 'expires_at' not in {c['name'] for c in inspect(engine).get_columns(table)}
 
 
-def wanted_and_lifetime_checks(first, second, factory):
+def shared_need_checks(first, second, factory):
     login(first, 'seller')
     item = request(first, 'post', '/api/v1/items/', 201, json=ITEM)
     assert item['expires_at'] is None
-    with factory.begin() as db:
-        db.get(Item, item['id']).expires_at = now() - timedelta(days=10)
-    rows = request(first, 'get', '/api/v1/items/', params={'q': '长期出售静音鼠标'})['items']
-    assert any(row['id'] == item['id'] and row['status'] == 'ACTIVE' for row in rows)
-
     login(first)
     login(second)
-    post = request(first, 'post', '/api/v1/wanted/', 201, json=WANTED)
+    task_id = request(first, 'post', '/api/v1/intents/', 201,
+                      json={'raw_query': '静音鼠标', 'parsed': {'keywords': ['鼠标']}})['intent']['id']
     barrier = Barrier(2)
-    original_embed = app_main.embed
 
-    def synchronized_embed(*args, **kwargs):
+    def publish_shared(client):
         barrier.wait(timeout=10)
-        return original_embed(*args, **kwargs)
+        return client.post('/api/v1/wanted/', json={**WANTED, 'intent_id': task_id})
 
-    # Distinct app instances have independent Python locks. PostgreSQL must
-    # serialize the same user/wanted pair and return the existing association.
-    with patch.object(app_main, 'embed', synchronized_embed), ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(request, client, 'post', f"/api/v1/wanted/{post['id']}/watch",
-                               json={'validity_days': 30}) for client in (first, second)]
-        results = [future.result(timeout=20) for future in futures]
-    task_id = results[0]['linked_intent_id']
-    assert task_id and task_id == results[1]['linked_intent_id']
+    # Separate app instances: the database user lock must prevent duplicate posts.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(publish_shared, client) for client in (first, second)]
+        responses = [future.result(timeout=20) for future in futures]
+    assert sorted(response.status_code for response in responses) == [201, 409]
+    post = next(response.json() for response in responses if response.status_code == 201)
+    assert post['intent']['id'] == task_id
     with factory() as db:
-        assert db.scalar(select(func.count()).select_from(WantedWatch).where(WantedWatch.wanted_id == post['id'])) == 1
-        task = db.get(Intent, task_id)
-        assert task.validity_days == 30 and task.max_price_cents == 30000
-    for _ in range(4):
+        assert db.scalar(select(func.count()).select_from(Wanted).where(Wanted.intent_id == task_id)) == 1
+    for _ in range(6):
         request(first, 'post', '/api/v1/intents/', 201,
                 json={'raw_query': '静音鼠标', 'parsed': {'keywords': ['鼠标']}})
+    assert len(request(first, 'get', '/api/v1/intents/my')) > 5
+    changed = request(first, 'patch', f"/api/v1/wanted/{post['id']}", json={'budget': 100})
+    assert changed['intent']['max_price'] == 100
+    request(first, 'delete', f"/api/v1/wanted/{post['id']}")
     with factory() as db:
-        before = db.scalar(select(func.count()).select_from(Wanted))
-    request(first, 'post', '/api/v1/wanted/', 409, json={**WANTED, 'enable_watch': True})
-    with factory() as db:
-        assert db.scalar(select(func.count()).select_from(Wanted)) == before
-    duplicate = request(first, 'post', f"/api/v1/wanted/{post['id']}/watch")
-    assert duplicate['linked_intent_id'] == task_id
-    request(first, 'delete', f"/api/v1/wanted/{post['id']}?stop_watch=true")
-    with factory() as db:
-        assert db.get(Wanted, post['id']).status == 'COMPLETED'
-        assert db.get(Intent, task_id).status == 'COMPLETED'
+        assert db.get(Wanted, post['id']).status == db.get(Intent, task_id).status == 'COMPLETED'
     return item['id']
 
 
@@ -265,9 +260,9 @@ def main():
                                 origins=['http://testserver'])
             app = app_main.create_app(settings)
             with TestClient(app) as first, TestClient(app_main.create_app(settings)) as second:
-                permanent_id = wanted_and_lifetime_checks(first, second, factory)
-                checks.extend(['permanent_item_public_filter', 'wanted_watch_concurrent_idempotency',
-                               'wanted_watch_quota_atomic_rollback', 'wanted_close_stops_linked_watch'])
+                permanent_id = shared_need_checks(first, second, factory)
+                checks.extend(['permanent_item_public_filter', 'shared_need_concurrent_publish_deduplication',
+                               'no_active_need_quota', 'wanted_edits_and_close_sync_to_task'])
                 locked_sale_check(first, app, engine, factory)
                 checks.append('postgres_row_lock_stale_cancel_cannot_overwrite_sale')
             mail_checks(engine, factory, settings)

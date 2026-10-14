@@ -22,7 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .email_auth import normalize_pku_email
 from .item_lifecycle import PUBLIC_ITEM_STATES
-from .models import Base, ChatMessage, Conversation, Item, User, UserBlock, now, uid
+from .models import Base, ChatAttachment, ChatMessage, Conversation, Item, User, UserBlock, now, uid
 
 
 logger = logging.getLogger(__name__)
@@ -152,11 +152,13 @@ def _prepare(factory, key, token, settings, at):
         identity = hashlib.sha256((recipient.id + ':' + ':'.join(sorted(message_ids))).encode()).hexdigest()
         message['Message-ID'] = f'<chat-{identity}@yandu.local>'
         preview = _line(messages[-1].body, 160)
+        if db.scalar(select(exists().where(ChatAttachment.message_id == messages[-1].id))):
+            preview = ('[图片] ' + preview).strip()
         url = settings.public_app_url.rstrip('/') + '/#messages/' + conversation.id
         message.set_content(f'{nickname} 在“{title}”的会话中发来 {len(messages)} 条未读消息。\n\n'
                             f'最新消息：{preview}\n\n查看并回复：{url}\n\n'
                             '请在燕渡网站内回复，此邮箱不接收聊天回复。\n'
-                            '你可以在燕渡的账户设置中关闭站内信邮件提醒。')
+                            '你可以在燕渡的个人主页关闭未读站内信邮件提醒。')
         return message, message_ids
 
 

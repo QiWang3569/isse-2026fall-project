@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from app import chat_email
 from app.chat_email import ChatEmailQueue, ChatEmailReceipt, process_chat_email_batch, send_chat_email as smtp_send_chat_email
 from app.config import Settings
-from app.models import Base, ChatMessage, Conversation, Item, User, UserBlock
+from app.models import Base, ChatAttachment, ChatMessage, Conversation, Item, Upload, User, UserBlock
 
 
 AT = datetime(2026, 10, 13, 12, 0)
@@ -34,7 +34,7 @@ def maildb(tmp_path, monkeypatch):
         ])
         db.flush()
         db.add(Item(id='item', seller_id='seller', title='鼠标', category='数码与影音', price_cents=1000,
-                    campus='燕园校本部', expires_at=AT + timedelta(days=14)))
+                    campus='燕园校本部'))
         db.flush()
         db.add(Conversation(id='conversation', item_id='item', buyer_id='buyer', seller_id='seller'))
     sent = []
@@ -73,6 +73,22 @@ def test_delay_merge_delivery_and_persistent_receipts(maildb):
     # A fresh session factory represents a restarted worker, with no memory cursor.
     restarted = sessionmaker(factory.kw['bind'], expire_on_commit=False)
     assert process_chat_email_batch(restarted, settings, at=AT + timedelta(days=1)) == 0
+
+
+@pytest.mark.parametrize('body', ['', '这是商品细节'])
+def test_image_mail_preview_keeps_attachments_private(maildb, body):
+    factory, settings, sent = maildb
+    add_message(factory, body=body)
+    path = '/api/v1/chat-images/private-image.jpg'
+    with factory.begin() as db:
+        db.add(Upload(path=path, user_id='buyer'))
+        db.flush()
+        db.add(ChatAttachment(path=path, message_id='message-1', position=0))
+    assert process_chat_email_batch(factory, settings, at=AT) == 1
+    content = sent[0].get_content()
+    assert '最新消息：[图片]' in content and body in content
+    assert path not in content and not sent[0].is_multipart()
+    assert 'https://yandu.example/#messages/conversation' in content
 
 
 @pytest.mark.parametrize('reason', ['opt_out', 'no_email', 'invalid_email', 'demo_recipient', 'demo_sender',
@@ -220,7 +236,7 @@ def test_cooldown_backoff_and_leases_cannot_starve_later_conversation(maildb):
         for index in range(100):
             item_id, conversation_id = f'item-{index}', f'conversation-{index}'
             db.add(Item(id=item_id, seller_id='seller', title='旧商品', category='数码与影音',
-                        price_cents=1000, campus='燕园校本部', expires_at=AT + timedelta(days=14)))
+                        price_cents=1000, campus='燕园校本部'))
             db.flush()
             db.add(Conversation(id=conversation_id, item_id=item_id, buyer_id='buyer', seller_id='seller'))
             db.flush()

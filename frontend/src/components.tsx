@@ -8,7 +8,7 @@ import {
   PackageOpen,
   SlidersHorizontal,
 } from "lucide-react";
-import { type Item, ago, campusShort, money, statusText, expiryText } from "./api";
+import { type Item, ago, campusShort, money, statusText } from "./api";
 
 export function Brand({ small = false }: { small?: boolean }) {
   return (
@@ -42,13 +42,9 @@ export function ProductArt({
         loading="lazy"
       />
     );
-  if (!item.is_demo)
-    return (
-      <div className="product-art product-placeholder" role="img" aria-label={`${item.title}，暂无图片`}>
-        <PackageOpen size={36} strokeWidth={1.25} aria-hidden="true" />
-        <span>暂无图片</span>
-      </div>
-    );
+  if (!item.is_demo) return <div className="product-art product-placeholder" role="img" aria-label={`${item.title}（暂无图片）`}>
+    <PackageOpen size={38} strokeWidth={1.25} /><span>暂无图片</span>
+  </div>;
   const art = item.art;
   const bg: Record<string, string> = {
     mouse: "#e5e6df",
@@ -342,7 +338,6 @@ export function Card({
             {campusShort(item.campus)}
           </span>
           <span>{ago(item.created_at)}</span>
-          {item.is_owner && <span>{expiryText(item.expires_at)}</span>}
         </div>
       </div>
     </article>

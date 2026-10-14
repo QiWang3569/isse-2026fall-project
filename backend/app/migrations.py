@@ -1,5 +1,8 @@
-"""Additive, idempotent upgrade for the existing 0.1 SQLite/PostgreSQL database."""
+"""Idempotent upgrades for the existing SQLite/PostgreSQL database."""
 from sqlalchemy import inspect, text
+from sqlalchemy.schema import CreateTable
+
+from .models import Base, Wanted
 
 
 def upgrade_buyer_agent(engine):
@@ -10,11 +13,7 @@ def upgrade_buyer_agent(engine):
                   'avatar_color': "VARCHAR(20) NOT NULL DEFAULT 'sage'"},
         'buyer_intents': {'excluded_keywords': "JSON NOT NULL DEFAULT '[]'",
                          'preferences': "JSON NOT NULL DEFAULT '[]'",
-                         'completed_item_id': 'VARCHAR(36)',
-                         'validity_days': 'INTEGER NOT NULL DEFAULT 14'},
-        'items': {'validity_days': 'INTEGER NOT NULL DEFAULT 14'},
-        'item_drafts': {'validity_days': 'INTEGER NOT NULL DEFAULT 14'},
-        'wanted_posts': {'validity_days': 'INTEGER NOT NULL DEFAULT 7'},
+                         'completed_item_id': 'VARCHAR(36)'},
         'conversations': {'deal_status': "VARCHAR(20) NOT NULL DEFAULT 'NONE'"},
         'chat_messages': {'hidden_at': 'TIMESTAMP'},
         'match_notifications': {'verdict': "VARCHAR(20) NOT NULL DEFAULT 'MATCH'",
@@ -30,3 +29,49 @@ def upgrade_buyer_agent(engine):
                 if name not in existing:
                     conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}'))
         conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email ON users (email)'))
+
+
+def upgrade_marketplace(engine):
+    """Remove automatic expiry and link public wanted posts to persistent searches."""
+    with engine.begin() as conn:
+        for table in ('items', 'buyer_intents', 'wanted_posts'):
+            columns = {column['name'] for column in inspect(conn).get_columns(table)}
+            if 'expires_at' in columns:
+                # EXPIRED was only used for automatic expiry, never a user close action.
+                conn.execute(text(f"UPDATE {table} SET status='ACTIVE' WHERE status='EXPIRED'"))
+                if table == 'buyer_intents':
+                    conn.execute(text('DROP INDEX IF EXISTS idx_intents_active'))
+                conn.execute(text(f'ALTER TABLE {table} DROP COLUMN expires_at'))
+        columns = {column['name']: column for column in inspect(conn).get_columns('wanted_posts')}
+        if 'intent_id' not in columns:
+            conn.execute(text('ALTER TABLE wanted_posts ADD COLUMN intent_id VARCHAR(36) REFERENCES buyer_intents(id)'))
+        if 'wanted_watches' in inspect(conn).get_table_names():
+            # Convert the local opt-in association before SQLite rebuilds wanted_posts.
+            # Retain the original task and its match history instead of backfilling a duplicate.
+            conn.execute(text('''UPDATE wanted_posts SET intent_id = (
+                SELECT w.intent_id FROM wanted_watches w JOIN buyer_intents i ON i.id = w.intent_id
+                WHERE w.wanted_id = wanted_posts.id AND i.buyer_id = wanted_posts.buyer_id
+            ) WHERE intent_id IS NULL'''))
+            conn.execute(text("""UPDATE buyer_intents SET status='COMPLETED' WHERE id IN
+                (SELECT intent_id FROM wanted_posts WHERE status NOT IN ('ACTIVE', 'PAUSED'))"""))
+            conn.execute(text('''UPDATE wanted_posts SET status =
+                (SELECT status FROM buyer_intents WHERE id = wanted_posts.intent_id)
+                WHERE intent_id IS NOT NULL'''))
+            conn.execute(text('DROP TABLE wanted_watches'))
+        if any(not columns[name]['nullable'] for name in ('category', 'budget_cents')):
+            if engine.dialect.name == 'postgresql':
+                for name in ('category', 'budget_cents'):
+                    conn.execute(text(f'ALTER TABLE wanted_posts ALTER COLUMN {name} DROP NOT NULL'))
+            else:
+                # The legacy association was converted above; no table now refers to wanted_posts.
+                metadata = type(Base.metadata)()
+                for table in Base.metadata.sorted_tables:
+                    table.to_metadata(metadata)
+                replacement = Wanted.__table__.to_metadata(metadata, name='wanted_posts_upgrade')
+                conn.execute(CreateTable(replacement))
+                names = ', '.join(column.name for column in Wanted.__table__.columns)
+                conn.execute(text(f'INSERT INTO wanted_posts_upgrade ({names}) SELECT {names} FROM wanted_posts'))
+                conn.execute(text('DROP TABLE wanted_posts'))
+                conn.execute(text('ALTER TABLE wanted_posts_upgrade RENAME TO wanted_posts'))
+        conn.execute(text('CREATE INDEX IF NOT EXISTS idx_intents_active ON buyer_intents (status)'))
+        conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_wanted_intent ON wanted_posts (intent_id)'))

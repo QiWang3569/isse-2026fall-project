@@ -52,7 +52,7 @@
 
 运行配置保存在服务器 `/opt/yandu/.env`。公开编排启用安全 Cookie、单个 HTTPS 来源和 `DEMO_MODE=false`；`APP_ENV` 从环境取值且默认回退为 `local`，因此发布检查必须明确验证最终值为 `production`。密码、模型密钥和邮件凭据不写入本页。
 
-新版本的未读站内信邮件提醒需要额外配置 `PUBLIC_APP_URL` 和 `CHAT_EMAIL_ENABLED`，默认关闭，并要求用户自行开启个人偏好。已配置验证码 SMTP 不会自动启用聊天提醒。配置、数据升级及回退兼容要求见 [有效期与邮件提醒更新](FOLLOWUP_FEATURES.md)。
+新版本的未读站内信邮件提醒需要额外配置 `PUBLIC_APP_URL` 和 `CHAT_EMAIL_ENABLED`，默认关闭，并要求用户自行开启个人偏好。已配置验证码 SMTP 不会自动启用聊天提醒。配置、数据升级及回退兼容要求见 [共享需求与邮件提醒更新](FOLLOWUP_FEATURES.md)。
 
 `Caddyfile.public` 配置了 ACME 的 `shortlived` 证书配置和 HSTS。证书持续续期是否成功需要线上检查，不能由旧记录推断。
 
