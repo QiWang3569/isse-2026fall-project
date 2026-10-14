@@ -66,54 +66,49 @@ def test_hard_filters_budget_campus_condition_and_self_exclusion(client):
     assert not ids.intersection({own['id'], costly['id'], wrong_campus['id'], worn['id'], unrelated['id']})
 
 
-def test_expired_reserved_sold_items_do_not_match_until_relisted(client, app):
+def test_old_items_stay_available_but_reserved_and_sold_do_not_match(client, app):
     login(client)
     with app.state.session_factory() as db:
-        db.get(Item, 'sample-1').expires_at = now() - timedelta(seconds=1)
+        db.get(Item, 'sample-1').created_at = now() - timedelta(days=365)
         db.commit()
-    result = intent(client)
-    assert result.json()['matches'] == []
+    assert intent(client).json()['matches'][0]['id'] == 'sample-1'
     login(client, 'seller')
-    item = publish(client).json()
-    client.patch(f"/api/v1/items/{item['id']}/status", json={'status': 'RESERVED'})
+    client.patch('/api/v1/items/sample-1/status', json={'status': 'RESERVED'})
     login(client)
-    notices = client.get('/api/v1/notifications/').json()
-    assert len(notices) == 1 and not notices[0]['available']
     assert intent(client).json()['matches'] == []
+    assert not client.get('/api/v1/notifications/').json()[0]['available']
     login(client, 'seller')
-    client.patch(f"/api/v1/items/{item['id']}/status", json={'status': 'SOLD'})
-    assert client.patch(f"/api/v1/items/{item['id']}/status", json={'status': 'ACTIVE'}).status_code == 200
+    client.patch('/api/v1/items/sample-1/status', json={'status': 'SOLD'})
+    assert client.patch('/api/v1/items/sample-1/status', json={'status': 'ACTIVE'}).status_code == 200
     login(client)
     assert client.get('/api/v1/notifications/').json()[0]['available']
 
 
-def test_task_limit_pause_resume_and_termination(client):
+def test_more_than_five_tasks_can_run_and_pause_resume_end_still_work(client):
     login(client)
-    tasks = [intent(client).json()['intent']['id'] for _ in range(5)]
-    assert intent(client).status_code == 409
+    tasks = [intent(client).json()['intent']['id'] for _ in range(6)]
+    assert len(client.get('/api/v1/intents/my').json()) == 6
     assert client.patch(f'/api/v1/intents/{tasks[0]}', json={'action': 'pause'}).status_code == 200
-    assert intent(client).status_code == 201
-    assert client.patch(f'/api/v1/intents/{tasks[0]}', json={'action': 'resume'}).status_code == 409
-    client.delete(f'/api/v1/intents/{tasks[1]}')
     assert client.patch(f'/api/v1/intents/{tasks[0]}', json={'action': 'resume'}).status_code == 200
+    client.delete(f'/api/v1/intents/{tasks[1]}')
     assert client.patch(f'/api/v1/intents/{tasks[1]}', json={'action': 'resume'}).status_code == 409
 
 
-def test_paused_and_expired_intents_do_not_receive_new_items(client, app):
+def test_paused_intents_stop_matching_while_old_active_intents_keep_matching(client, app):
     login(client)
     paused = intent(client).json()['intent']['id']
-    expired = intent(client).json()['intent']['id']
+    old = intent(client).json()['intent']['id']
     client.patch(f'/api/v1/intents/{paused}', json={'action': 'pause'})
     with app.state.session_factory() as db:
-        db.get(Intent, expired).expires_at = now() - timedelta(seconds=1)
+        db.get(Intent, old).created_at = now() - timedelta(days=365)
         db.commit()
     login(client, 'seller')
     product = publish(client).json()
     login(client)
-    assert product['id'] not in {n['item']['id'] for n in client.get('/api/v1/notifications/').json()}
-    assert client.patch(f'/api/v1/intents/{expired}', json={'action': 'resume'}).status_code == 409
-    assert client.patch(f'/api/v1/intents/{expired}', json={'action': 'renew'}).status_code == 200
-    assert product['id'] in {n['item']['id'] for n in client.get('/api/v1/notifications/').json()}
+    assert product['id'] not in {n['item']['id'] for n in client.get(f'/api/v1/notifications/?intent_id={paused}').json()}
+    assert product['id'] in {n['item']['id'] for n in client.get(f'/api/v1/notifications/?intent_id={old}').json()}
+    assert client.patch(f'/api/v1/intents/{paused}', json={'action': 'resume'}).status_code == 200
+    assert product['id'] in {n['item']['id'] for n in client.get(f'/api/v1/notifications/?intent_id={paused}').json()}
 
 
 def test_accounts_cannot_modify_each_others_items_tasks_notifications(client):

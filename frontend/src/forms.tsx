@@ -1,19 +1,24 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, Check, ImagePlus, Sparkles, Trash2, X } from "lucide-react";
-import { api, type Meta, type Parsed, type ParsedItem, type Item, type ItemDraft, type Wanted } from "./api";
+import { api, type Meta, type Parsed, type ParsedItem, type Item, type ItemDraft, type Wanted, type Intent } from "./api";
 
 type Common = { meta: Meta; onDone: () => void };
 
 export function IntentForm({
   meta,
   initial,
+  editingIntent,
   onDone,
-}: Common & { initial: string }) {
-  const [query, setQuery] = useState(initial);
-  const [parsed, setParsed] = useState<Parsed | null>(null);
-  const [keywords, setKeywords] = useState("");
-  const [excluded, setExcluded] = useState("");
-  const [preferences, setPreferences] = useState("");
+}: Common & { initial: string; editingIntent?: Intent | null }) {
+  const [query, setQuery] = useState(editingIntent?.raw_query || initial);
+  const [parsed, setParsed] = useState<Parsed | null>(editingIntent ? {
+    category: editingIntent.category, max_price: editingIntent.max_price, campus: editingIntent.campus,
+    keywords: editingIntent.keywords, excluded_keywords: editingIntent.excluded_keywords,
+    preferences: editingIntent.preferences, condition_grade: editingIntent.condition_grade, clarification: null,
+  } : null);
+  const [keywords, setKeywords] = useState(editingIntent?.keywords.join("，") || "");
+  const [excluded, setExcluded] = useState(editingIntent?.excluded_keywords.join("，") || "");
+  const [preferences, setPreferences] = useState(editingIntent?.preferences.join("，") || "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function submit(e: FormEvent) {
@@ -30,7 +35,7 @@ export function IntentForm({
         setExcluded(result.parsed.excluded_keywords.join("，"));
         setPreferences(result.parsed.preferences.join("，"));
       } else {
-        await api("/intents/", "POST", {
+        await api(editingIntent ? `/intents/${editingIntent.id}/details` : "/intents/", editingIntent ? "PATCH" : "POST", {
           raw_query: query,
           parsed: {
             ...parsed,
@@ -60,7 +65,7 @@ export function IntentForm({
         <textarea
           required
           minLength={2}
-          maxLength={500}
+          maxLength={2500}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -175,7 +180,7 @@ export function IntentForm({
         </div>
       )}
       <p className="hint">
-        每人最多 5 个活跃任务，默认持续 14 天，可随时暂停或结束。
+        持续替你留意，直到你暂停或结束。{editingIntent?.wanted_id && "修改条件会同步更新求购看板。"}
         {meta.ai_mode === "local" &&
           "当前演示使用关键词规则解析，请确认筛选条件。"}
         {meta.ai_mode === "remote" &&
@@ -187,7 +192,7 @@ export function IntentForm({
         </p>
       )}
       <button className="button primary full" disabled={busy}>
-        {busy ? "正在处理…" : parsed ? "确认条件，开始代蹲" : "理解我的需求"}
+        {busy ? "正在处理…" : parsed ? editingIntent ? "保存需求与条件" : "确认条件，开始代蹲" : "理解我的需求"}
         {!busy && <ArrowRight size={17} />}
       </button>
     </form>
@@ -606,7 +611,8 @@ export function WantedForm({
   onDone,
   initial,
   editingWanted,
-}: Common & { initial: string; editingWanted?: Wanted | null }) {
+  initialIntent,
+}: Common & { initial: string; editingWanted?: Wanted | null; initialIntent?: Intent | null }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(e: FormEvent<HTMLFormElement>) {
@@ -618,9 +624,10 @@ export function WantedForm({
       const payload = {
         title: data.get("title"),
         description: data.get("description"),
-        category: data.get("category"),
-        budget: Number(data.get("budget")),
+        category: data.get("category") || null,
+        budget: data.get("budget") === "" ? null : Number(data.get("budget")),
         campus: data.get("campus"),
+        ...(!editingWanted && initialIntent ? { intent_id: initialIntent.id } : {}),
       };
       if (editingWanted) {
         await api(`/wanted/${editingWanted.id}`, "PATCH", payload);
@@ -637,7 +644,7 @@ export function WantedForm({
   return (
     <form className="stack-form" onSubmit={submit}>
       <p className="muted">
-        把需要的物品告诉同学们，也许它正好在某个人的抽屉里。
+        发布到求购看板的同时，燕渡会自动替你代蹲。已有代蹲会沿用原来的匹配记录。
       </p>
       <label>
         你想求购什么？
@@ -646,7 +653,7 @@ export function WantedForm({
           required
           minLength={2}
           maxLength={120}
-          defaultValue={editingWanted?.title || initial}
+          defaultValue={editingWanted?.title || initialIntent?.raw_query.split("\n")[0].slice(0, 120) || initial}
           placeholder="求一本离散数学教材"
         />
       </label>
@@ -654,18 +661,17 @@ export function WantedForm({
         具体要求
         <textarea
           name="description"
-          required
-          minLength={5}
-          maxLength={1000}
+          maxLength={2500}
           rows={3}
-          defaultValue={editingWanted?.description}
+          defaultValue={editingWanted?.description ?? initialIntent?.raw_query}
           placeholder="型号、版本、能接受的成色、交接时间…"
         />
       </label>
       <div className="form-grid">
         <label>
           物品分类
-          <select name="category" defaultValue={editingWanted?.category}>
+          <select name="category" defaultValue={editingWanted?.category || initialIntent?.category || ""}>
+            <option value="">不限分类</option>
             {meta.categories.map((c) => (
               <option key={c}>{c}</option>
             ))}
@@ -676,23 +682,23 @@ export function WantedForm({
           <input
             name="budget"
             type="number"
-            required
             min="0"
             max="999999"
             step="0.01"
-            defaultValue={editingWanted ? String(editingWanted.budget) : undefined}
+            defaultValue={editingWanted?.budget ?? initialIntent?.max_price ?? ""}
+            placeholder="不限预算"
           />
         </label>
         <label>
           交接校区
-          <select name="campus" defaultValue={editingWanted?.campus}>
+          <select name="campus" defaultValue={editingWanted?.campus || initialIntent?.campus || "不限校区"}>
             {meta.campuses.map((c) => (
               <option key={c}>{c}</option>
             ))}
           </select>
         </label>
       </div>
-      <p className="hint">求购将展示 7 天，找到后可以提前结束。</p>
+      <p className="hint">求购持续展示；编辑条件、暂停或找到商品后，求购与代蹲会一起更新。</p>
       {error && (
         <p className="form-error" role="alert">
           {error}

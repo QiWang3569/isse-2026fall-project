@@ -240,7 +240,7 @@ def test_failed_jobs_remain_saved_can_retry_and_are_owner_scoped(tmp_path, monke
         assert len(client.get('/api/v1/notifications/').json()) == 1
 
 
-@pytest.mark.parametrize('change', ['sold', 'pause', 'expired'])
+@pytest.mark.parametrize('change', ['sold', 'pause', 'completed'])
 def test_provider_work_holds_no_write_lock_and_revalidates_before_notify(tmp_path, monkeypatch, change):
     entered, release = threading.Event(), threading.Event()
     def handler(request):
@@ -264,7 +264,7 @@ def test_provider_work_holds_no_write_lock_and_revalidates_before_notify(tmp_pat
                 assert client.patch(f'/api/v1/intents/{task_id}', json={'action': 'pause'}).status_code == 200
             else:
                 with app.state.session_factory() as db:
-                    db.get(Intent, task_id).expires_at = now()
+                    db.get(Intent, task_id).status = 'COMPLETED'
                     db.commit()
         finally:
             release.set()

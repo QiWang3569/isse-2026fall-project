@@ -52,7 +52,7 @@ class ItemCreate(StrictModel):
 
 
 class QueryIn(StrictModel):
-    raw_query: str = Field(min_length=2, max_length=500)
+    raw_query: str = Field(min_length=2, max_length=2500)
 
 
 class ParsedIntent(StrictModel):
@@ -99,12 +99,20 @@ class IntentChange(StrictModel):
 
 class WantedCreate(StrictModel):
     title: str = Field(min_length=2, max_length=120)
-    description: str = Field(min_length=5, max_length=1000)
-    category: str
-    budget: Decimal = Field(ge=0, le=999999, decimal_places=2)
-    campus: str
-    category_valid = field_validator('category')(classmethod(lambda cls, v: ItemCreate.category_valid(v)))
+    description: str = Field(default='', max_length=2500)
+    category: str | None = None
+    budget: Decimal | None = Field(default=None, ge=0, le=999999, decimal_places=2)
+    campus: str = '不限校区'
+    intent_id: str | None = None
+    category_valid = field_validator('category')(classmethod(lambda cls, v: ItemCreate.category_valid(v) if v is not None else None))
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
+
+    @model_validator(mode='after')
+    def query_length(self):
+        query = self.description if self.description.startswith(self.title) else self.title + '\n' + self.description
+        if len(query) > 2500:
+            raise ValueError('求购标题与描述合计不能超过 2500 字')
+        return self
 
 
 class ItemUpdate(StrictModel):
@@ -125,7 +133,7 @@ class ItemUpdate(StrictModel):
 
 class WantedUpdate(StrictModel):
     title: str | None = Field(default=None, min_length=2, max_length=120)
-    description: str | None = Field(default=None, min_length=5, max_length=1000)
+    description: str | None = Field(default=None, max_length=2500)
     category: str | None = None
     budget: Decimal | None = Field(default=None, ge=0, le=999999, decimal_places=2)
     campus: str | None = None

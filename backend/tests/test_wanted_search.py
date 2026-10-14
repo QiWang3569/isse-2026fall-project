@@ -44,7 +44,7 @@ def test_search_filters_before_result_limit_and_hides_inactive(client, app):
                           budget_cents=5000, campus='燕园校本部'))
         db.commit()
     add_wanted(app, title='求购限量版画册', status='CLOSED')
-    add_wanted(app, title='求购限量版画册', expires_at=now() - timedelta(seconds=1))
+    add_wanted(app, title='求购限量版画册', status='PAUSED')
 
     assert oldest not in search_ids(client, '')
     assert search_ids(client, '限量版画册') == {oldest}

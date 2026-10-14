@@ -198,6 +198,8 @@ export default function App() {
     [compare, setCompare] = useState<Item[]>([]);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [editingWanted, setEditingWanted] = useState<Wanted | null>(null);
+  const [editingIntent, setEditingIntent] = useState<Intent | null>(null);
+  const [publishingIntent, setPublishingIntent] = useState<Intent | null>(null);
   const [wantedSearch, setWantedSearch] = useState(""),
     [wantedQuery, setWantedQuery] = useState("");
   const [notices, setNotices] = useState<Notice[]>([]),
@@ -425,7 +427,8 @@ export default function App() {
   }
   function openForm(type: "intent" | "publish" | "wanted", text = "") {
     if (!needUser()) return;
-    if (type === "intent") setIntentQuery(text);
+    if (type === "intent") { setIntentQuery(text); setEditingIntent(null); }
+    if (type === "wanted") { setEditingWanted(null); setPublishingIntent(null); }
     if (type === "publish") setPrefill(null);
     setModal(type);
   }
@@ -1423,7 +1426,7 @@ export default function App() {
                   {meta.ai_mode === "local"
                     ? "当前为本地关键词匹配演示"
                     : "买家助手已开启：理解需求并核对商品描述"}{" "}
-                  · 每个任务持续 14 天 · 最多 5 个活跃任务
+                  · 持续留意，可随时暂停或结束
                 </span>
               </div>
               {!user ? (
@@ -1462,10 +1465,7 @@ export default function App() {
                             ? "正在替你留意"
                             : statusText[i.status]}
                         </span>
-                        <span>
-                          {new Date(i.expires_at).toLocaleDateString("zh-CN")}{" "}
-                          到期
-                        </span>
+                        <span>{i.wanted_id ? "已关联求购看板" : "私密代蹲"}</span>
                       </div>
                       <h3>{i.raw_query}</h3>
                       <div className="pills">
@@ -1536,9 +1536,7 @@ export default function App() {
                                     action:
                                       i.status === "ACTIVE"
                                         ? "pause"
-                                        : i.status === "EXPIRED"
-                                          ? "renew"
-                                          : "resume",
+                                        : "resume",
                                   }),
                                 )
                               }
@@ -1550,21 +1548,11 @@ export default function App() {
                               )}{" "}
                               {i.status === "ACTIVE" ? "暂停" : "继续"}
                             </button>
-                            <button
-                              disabled={busy}
-                              onClick={() =>
-                                void operate(
-                                  () =>
-                                    api(`/intents/${i.id}`, "PATCH", {
-                                      action: "renew",
-                                    }),
-                                  "已续期 14 天",
-                                )
-                              }
-                            >
-                              <RefreshCw size={13} />
-                              续期
-                            </button>
+                            <button disabled={busy} onClick={() => { setEditingIntent(i); setModal("intent"); }}>编辑条件</button>
+                            <button disabled={busy} onClick={() => {
+                              if (i.wanted_id) navigate("mywanted");
+                              else { setPublishingIntent(i); setEditingWanted(null); setModal("wanted"); }
+                            }}>{i.wanted_id ? "查看求购" : "发布到求购看板"}</button>
                             <button
                               disabled={busy}
                               onClick={() =>
@@ -1651,13 +1639,13 @@ export default function App() {
                   {wanted.data.map((w) => (
                     <article className="wanted-card" key={w.id}>
                       <div className="wanted-card-top">
-                        <span className="category-label">{w.category}</span>
+                        <span className="category-label">{w.category || "不限分类"}</span>
                         <Sprout size={21} />
                       </div>
                       <h3>{w.title}</h3>
                       <p>{w.description}</p>
                       <div className="wanted-budget">
-                        预算 <strong>¥{money(w.budget)}</strong>
+                        预算 <strong>{w.budget == null ? "不限预算" : `¥${money(w.budget)}`}</strong>
                         <span>
                           <MapPin size={13} />
                           {campusShort(w.campus)}
@@ -1677,6 +1665,7 @@ export default function App() {
                               disabled={busy}
                               onClick={() => {
                                 setEditingWanted(w);
+                                setPublishingIntent(null);
                                 setModal("wanted");
                               }}
                             >
@@ -1736,7 +1725,7 @@ export default function App() {
               <Intro
                 kicker="YOUR WISHES"
                 title="我的求购"
-                text="管理你发布的求购，找到后可以提前结束。"
+                text="求购与代蹲共用需求和匹配记录，找到后可以一起结束。"
               >
                 <button
                   className="button primary"
@@ -1760,69 +1749,33 @@ export default function App() {
                   {myWanted.data.map((w) => (
                     <article className="wanted-card" key={w.id}>
                       <div className="wanted-card-top">
-                        <span className="category-label">{w.category}</span>
+                        <span className="category-label">{w.category || "不限分类"}</span>
                         <Sprout size={21} />
                       </div>
                       <h3>{w.title}</h3>
                       <p>{w.description}</p>
                       <div className="wanted-budget">
-                        预算 <strong>¥{money(w.budget)}</strong>
+                        预算 <strong>{w.budget == null ? "不限预算" : `¥${money(w.budget)}`}</strong>
                         <span>
                           <MapPin size={13} />
                           {campusShort(w.campus)}
                         </span>
                       </div>
+                      {w.intent ? <div className="wanted-matching">
+                        <button className="text-button" onClick={() => { setNoticeIntent(w.intent); setModal("notifications"); }}>
+                          <Bell size={15} />发现 {w.intent.match_count} 件好物 <ArrowRight size={14} />
+                        </button>
+                        <span>{w.status === "ACTIVE" ? w.intent.matching_state === "FAILED" ? "核对暂时失败，可在代蹲中重试" : w.intent.matching_state !== "DONE" ? "正在核对商品…" : "燕渡持续替你留意" : "求购与代蹲状态已同步"}</span>
+                      </div> : w.status === "ACTIVE" && <button className="text-button" disabled={busy} onClick={() => void operate(() => api(`/wanted/${w.id}/watch`, "POST"), "已关联代蹲")}>开启代蹲</button>}
                       <div className="wanted-bottom">
-                        <span>
-                          {w.status === "ACTIVE"
-                            ? "求购中"
-                            : w.status === "EXPIRED"
-                              ? "已过期"
-                              : "已结束"}
-                        </span>
-                        {w.status === "ACTIVE" ? (
-                          <div className="wanted-actions">
-                            <button
-                              className="text-button"
-                              disabled={busy}
-                              onClick={() => {
-                                setEditingWanted(w);
-                                setModal("wanted");
-                              }}
-                            >
-                              编辑
-                            </button>
-                            <button
-                              className="text-button"
-                              disabled={busy}
-                              onClick={() =>
-                                void operate(
-                                  () => api(`/wanted/${w.id}`, "DELETE"),
-                                  "求购已结束",
-                                )
-                              }
-                            >
-                              我已找到
-                              <Check size={15} />
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="wanted-actions">
-                            <button
-                              className="text-button"
-                              disabled={busy}
-                              onClick={() =>
-                                void operate(
-                                  () => api(`/wanted/${w.id}/renew`, "POST"),
-                                  "求购已重新发布",
-                                )
-                              }
-                            >
-                              重新发布
-                              <RefreshCw size={14} />
-                            </button>
-                          </div>
-                        )}
+                        <span>{w.status === "ACTIVE" ? w.intent ? "求购与代蹲进行中" : "求购中" : statusText[w.status] || "已结束"}</span>
+                        <div className="wanted-actions">
+                          {["ACTIVE", "PAUSED"].includes(w.status) ? <>
+                            <button className="text-button" disabled={busy} onClick={() => { setEditingWanted(w); setPublishingIntent(null); setModal("wanted"); }}>编辑</button>
+                            {w.intent && <button className="text-button" disabled={busy} onClick={() => void operate(() => api(`/intents/${w.intent!.id}`, "PATCH", { action: w.status === "ACTIVE" ? "pause" : "resume" }), w.status === "ACTIVE" ? "求购与代蹲已暂停" : "求购与代蹲已恢复")}>{w.status === "ACTIVE" ? "暂停" : "继续"}</button>}
+                            <button className="text-button" disabled={busy} onClick={() => void operate(() => api(`/wanted/${w.id}`, "DELETE"), "求购与代蹲已一起结束")}>我已找到 <Check size={15} /></button>
+                          </> : <button className="text-button" disabled={busy} onClick={() => void operate(() => api(`/wanted/${w.id}/renew`, "POST"), "求购与代蹲已重新开启")}>重新发布 <RefreshCw size={14} /></button>}
+                        </div>
                       </div>
                     </article>
                   ))}
@@ -1990,13 +1943,15 @@ export default function App() {
         </Modal>
       )}
       {modal === "intent" && (
-        <Modal title="把需要的，交给燕渡留意" onClose={() => setModal(null)}>
+        <Modal title={editingIntent ? "修改需求与代蹲条件" : "把需要的，交给燕渡留意"} onClose={() => { setModal(null); setEditingIntent(null); }}>
           <IntentForm
             meta={meta}
             initial={intentQuery}
+            editingIntent={editingIntent}
             onDone={() => {
               setModal(null);
-              setToast("需求已保存，燕渡会核对商品并持续代蹲");
+              setToast(editingIntent ? "需求已更新，关联求购已同步" : "需求已保存，燕渡会核对商品并持续代蹲");
+              setEditingIntent(null);
               refresh();
               navigate("intents");
             }}
@@ -2031,18 +1986,21 @@ export default function App() {
           onClose={() => {
             setModal(null);
             setEditingWanted(null);
+            setPublishingIntent(null);
           }}
         >
           <WantedForm
             meta={meta}
             initial={query}
             editingWanted={editingWanted}
+            initialIntent={publishingIntent}
             onDone={() => {
               setModal(null);
               setEditingWanted(null);
               refresh();
-              navigate("wanted");
-              setToast(editingWanted ? "求购已更新" : "求购已发布，期待好物与你相遇");
+              navigate("mywanted");
+              setPublishingIntent(null);
+              setToast(editingWanted ? "求购与代蹲条件已同步更新" : "求购已发布，燕渡已开始替你代蹲");
             }}
           />
         </Modal>

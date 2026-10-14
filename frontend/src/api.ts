@@ -22,7 +22,7 @@ export type Item = {
   status: string;
   seller: User;
   created_at: string;
-  expires_at: string;
+  expires_at: string | null;
   is_favorite: boolean;
   is_owner: boolean;
   is_demo: boolean;
@@ -112,7 +112,9 @@ export type Intent = Parsed & {
   status: string;
   match_count: number;
   created_at: string;
-  expires_at: string;
+  expires_at: string | null;
+  wanted_id: string | null;
+  wanted_status: string | null;
   matching_mode: string;
   matching_state: "PENDING" | "RUNNING" | "DONE" | "FAILED";
   completed_item_id: string | null;
@@ -163,14 +165,15 @@ export type Wanted = {
   id: string;
   title: string;
   description: string;
-  category: string;
-  budget: number;
+  category: string | null;
+  budget: number | null;
   campus: string;
   buyer: User;
   is_owner: boolean;
   status: string;
   created_at: string;
-  expires_at: string;
+  expires_at: string | null;
+  intent: Intent | null;
 };
 export type Report = {
   id: string;

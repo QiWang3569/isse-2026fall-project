@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from .buyer_agent import Assessment, Evidence, ModelUnavailable, review_candidates
 from .models import Intent, Item, MatchJob, Notification, now
 from .schemas import CONDITIONS
-from .services import normalize, similarity
+from .services import embed, model_name, normalize, similarity
 
 
 def item_data(item):
@@ -30,8 +30,8 @@ def intent_data(intent):
 
 
 def eligible(item, intent):
-    return (intent.status == 'ACTIVE' and intent.expires_at > now()
-            and item.status == 'ACTIVE' and item.expires_at > now()
+    return (intent.status == 'ACTIVE'
+            and item.status == 'ACTIVE'
             and item.seller_id != intent.buyer_id
             and (not intent.category or item.category == intent.category)
             and (intent.max_price_cents is None or item.price_cents <= intent.max_price_cents)
@@ -98,7 +98,7 @@ class MatchingRunner:
 
     def enqueue_item(self, db, item):
         return [self.enqueue(db, 'intent', intent.id, item.id)
-                for intent in db.scalars(select(Intent).where(Intent.status == 'ACTIVE', Intent.expires_at > now()))
+                for intent in db.scalars(select(Intent).where(Intent.status == 'ACTIVE'))
                 if eligible(item, intent)]
 
     def run_or_wake(self, job_id):
@@ -132,7 +132,7 @@ class MatchingRunner:
                 if kind == 'intent':
                     ids = [target_id]
                 else:
-                    ids = list(db.scalars(select(Intent.id).where(Intent.status == 'ACTIVE', Intent.expires_at > now())))
+                    ids = list(db.scalars(select(Intent.id).where(Intent.status == 'ACTIVE')))
             matched = []
             for intent_id in ids:
                 if self.stop_event.is_set():
@@ -154,12 +154,27 @@ class MatchingRunner:
             return []
 
     def _match(self, intent_id, item_id=None):
+        # Migrated and edited wanted posts acquire vectors in a retryable job.
         with self.factory() as db:
             intent = db.get(Intent, intent_id)
-            if not intent or intent.status != 'ACTIVE' or intent.expires_at <= now():
+            if not intent or intent.status != 'ACTIVE':
+                return []
+            missing_vector = self.settings.embedding_mode == 'remote' and intent.embedding is None
+            spec = intent_data(intent)
+        if missing_vector:
+            vector = embed(' '.join(spec['keywords']), self.settings)
+            with self.lock, self.factory() as db:
+                intent = db.scalar(select(Intent).where(Intent.id == intent_id).with_for_update())
+                if not intent or intent.status != 'ACTIVE' or intent_data(intent) != spec:
+                    return []
+                intent.embedding, intent.embedding_model = vector, model_name(self.settings)
+                db.commit()
+        with self.factory() as db:
+            intent = db.get(Intent, intent_id)
+            if not intent or intent.status != 'ACTIVE':
                 return []
             spec = intent_data(intent)
-            query = select(Item).where(Item.status == 'ACTIVE', Item.expires_at > now(), Item.seller_id != intent.buyer_id)
+            query = select(Item).where(Item.status == 'ACTIVE', Item.seller_id != intent.buyer_id)
             if item_id:
                 query = query.where(Item.id == item_id)
             if intent.category:
