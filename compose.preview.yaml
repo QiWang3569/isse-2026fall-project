@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: yandu
       POSTGRES_USER: yandu
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -14,33 +14,38 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    networks: [private]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
 
   app:
-    build: .
+    image: yandu:preview
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     env_file: .env
     environment:
-      APP_ENV: production
+      APP_ENV: local
       DEMO_MODE: "false"
-      SESSION_COOKIE_SECURE: "true"
-      DATABASE_URL: postgresql+psycopg://yandu:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/yandu
-      ALLOWED_ORIGINS: https://${SITE_DOMAIN:?Set SITE_DOMAIN in .env}
-      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN in .env}
+      SESSION_COOKIE_SECURE: "false"
+      DATABASE_URL: postgresql+psycopg://yandu:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/yandu
+      ALLOWED_ORIGINS: http://127.0.0.1:18000,http://localhost:18000
     depends_on:
       postgres:
         condition: service_healthy
-    volumes:
-      - app_data:/app/data
-    expose: ["8000"]
     ports:
       - "127.0.0.1:8000:8000"
+    volumes:
+      - app_data:/app/data
     healthcheck:
-      test: ["CMD", "python", "-c", "import os, urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/api/v1/health', headers={'Host': os.environ['SITE_DOMAIN']}); urllib.request.urlopen(request, timeout=3).read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).read()"]
       interval: 20s
       timeout: 5s
       retries: 5
-    networks: [private]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
 
   backup:
     image: pgvector/pgvector:pg16
@@ -48,17 +53,21 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      app:
+        condition: service_healthy
     environment:
       PGHOST: postgres
       PGUSER: yandu
       PGDATABASE: yandu
-      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      BACKUP_RETENTION_DAYS: 14
     entrypoint: ["sh", "/usr/local/bin/backup_postgres.sh"]
     volumes:
       - ./scripts/backup_postgres.sh:/usr/local/bin/backup_postgres.sh:ro
       - ./data/backups/postgres:/backups
-    networks: [private]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
 
   prometheus:
     image: prom/prometheus:latest
@@ -76,7 +85,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    networks: [private]
 
   grafana:
     image: grafana/grafana:latest
@@ -93,10 +101,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    networks: [private]
-
-networks:
-  private:
 
 volumes:
   postgres_data:
