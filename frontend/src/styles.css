@@ -257,11 +257,22 @@ a {
 .chat-thread { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .chat-thread-head { display: flex; align-items: center; gap: 12px; padding: 15px 20px; border-bottom: 1px solid var(--line); }
 .chat-thread-head,
+.chat-item-summary,
 .chat-deal-actions,
 .chat-report-form,
 .chat-compose { flex-shrink: 0; }
 .chat-thread-head div { display: grid; gap: 4px; }
 .chat-thread-head small { color: var(--muted); }
+.chat-item-summary { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 18px; text-align: left; border-bottom: 1px solid var(--line); }
+.chat-item-summary:hover { background: var(--light); }
+.chat-item-summary .product-art, .chat-item-summary .product-photo { width: 64px; height: 48px; border-radius: 7px; flex-shrink: 0; }
+.chat-item-summary .product-placeholder { gap: 2px; font-size: 9px; }
+.chat-item-summary .product-placeholder svg { width: 20px; height: 20px; }
+.chat-item-summary > span { display: grid; gap: 5px; min-width: 0; flex: 1; }
+.chat-item-summary strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-item-summary small { color: var(--muted); font-size: 11px; }
+.chat-item-summary > svg { flex-shrink: 0; }
+.detail-chat-back { margin-bottom: 14px; }
 .chat-back { display: none; }
 .chat-history { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 20px; }
 .chat-history > * { flex-shrink: 0; }
@@ -1009,6 +1020,7 @@ main {
   aspect-ratio: 360 / 260;
   object-fit: cover;
 }
+.search-rule { color: var(--muted); font-size: 12px; margin: 10px 0; }
 .condition-chip {
   position: absolute;
   top: 11px;
@@ -1223,32 +1235,6 @@ main {
   color: #909d83;
   padding: 3px;
 }
-.wanted-search {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  margin-bottom: 20px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: white;
-  color: var(--muted);
-}
-.wanted-search > svg,
-.wanted-search button {
-  flex-shrink: 0;
-}
-.wanted-search input {
-  flex: 1;
-  min-width: 0;
-  width: 100%;
-  border: 0;
-  background: transparent;
-  color: #233c32;
-}
-.wanted-search .button {
-  padding: 10px 16px;
-}
 .wanted-search-summary {
   margin: -6px 0 20px;
   color: var(--muted);
@@ -1328,6 +1314,7 @@ main {
 }
 .wanted-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-left: auto;
@@ -1993,6 +1980,10 @@ footer .brand svg {
   flex-direction: row !important;
   align-items: center;
 }
+.check-label input[type="checkbox"] { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--green); }
+.notification-settings { border: 1px solid var(--line); border-radius: 16px; padding: 20px 24px; margin: 20px 0; }
+.notification-settings .check-label { display: flex; gap: 10px; font-weight: 600; font-size: 14px; }
+.notification-settings .hint { margin: 10px 0 0; overflow-wrap: anywhere; }
 .audit-title {
   font-size: 18px;
   margin: 30px 0 18px;
@@ -2950,7 +2941,6 @@ footer .brand svg {
 :root[data-theme="dark"] .sidebar { background: #17241b; border-color: var(--line); }
 :root[data-theme="dark"] .topbar { background: #1b2b20ef; }
 :root[data-theme="dark"] .mobile-search,
-:root[data-theme="dark"] .wanted-search,
 :root[data-theme="dark"] .avatar-menu,
 :root[data-theme="dark"] .modal,
 :root[data-theme="dark"] .chat-layout,
@@ -3227,7 +3217,6 @@ footer .brand svg {
 :root[data-theme="dark"] .intent-banner input::placeholder { color: var(--night-subtle); }
 :root[data-theme="dark"] .global-search input,
 :root[data-theme="dark"] .mobile-search input,
-:root[data-theme="dark"] .wanted-search input,
 :root[data-theme="dark"] .intent-banner input,
 :root[data-theme="dark"] .filter-row select,
 :root[data-theme="dark"] .campus-picker select,
@@ -3280,8 +3269,7 @@ footer .brand svg {
 :root[data-theme="dark"] .intent-banner form,
 :root[data-theme="dark"] .auth-tabs button.active,
 :root[data-theme="dark"] .publish-tabs button.active,
-:root[data-theme="dark"] .mobile-search,
-:root[data-theme="dark"] .wanted-search { background: var(--night-surface); border-color: var(--night-border); }
+:root[data-theme="dark"] .mobile-search { background: var(--night-surface); border-color: var(--night-border); }
 :root[data-theme="dark"] .section-heading h2,
 :root[data-theme="dark"] .page-intro h1,
 :root[data-theme="dark"] .intent-banner h2,
@@ -3394,3 +3382,20 @@ footer .brand svg {
 :root[data-theme="dark"] .form-error { color: #f8c9b8; background: #4f3531; }
 :root[data-theme="dark"] .chat-unread,
 :root[data-theme="dark"] .notification-button > span { color: #f4f1eb; background: #385b41; }
+
+/* Both listing pages share one visible search entry at each breakpoint. */
+.global-search input,
+.mobile-search input {
+  min-width: 0;
+}
+.global-search > svg,
+.global-search button,
+.mobile-search > svg,
+.mobile-search button {
+  flex-shrink: 0;
+}
+.search-submit {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}

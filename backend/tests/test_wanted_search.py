@@ -32,7 +32,8 @@ def test_search_title_description_case_and_literal_wildcards(client, app):
     assert search_ids(client, '%_') == {literal}
     assert search_ids(client, '不存在的物品') == set()
     assert search_ids(client, '') == search_ids(client, '   ')
-    assert client.get('/api/v1/wanted/', params={'q': 'a' * 101}).status_code == 422
+    assert client.get('/api/v1/wanted/', params={'q': 'a' * 120}).status_code == 200
+    assert client.get('/api/v1/wanted/', params={'q': 'a' * 121}).status_code == 422
 
 
 def test_search_filters_before_result_limit_and_hides_inactive(client, app):
@@ -58,3 +59,12 @@ def test_search_preserves_my_wanted_access_rules(client, app):
     response = client.get('/api/v1/wanted/', params={'mine': 'true', 'q': '词典'})
     assert response.status_code == 200
     assert {post['id'] for post in response.json()} == {own}
+
+
+def test_search_uses_all_whitespace_separated_terms_across_title_and_description(client, app):
+    wanted_id = add_wanted(app, title='求购 ThinkPad 电脑', description='需要静音键盘和原装充电器')
+    add_wanted(app, title='求购 ThinkPad 电脑', description='只需要主机，不需要配件')
+    add_wanted(app, title='求购静音键盘', description='只需要蓝牙键盘')
+    assert search_ids(client, '  THINKPAD\t静音\n充电器  ') == {wanted_id}
+    assert search_ids(client, '静音 thinkpad') == {wanted_id}
+    assert search_ids(client, 'thinkpad 不存在的配件') == set()

@@ -30,7 +30,7 @@ export function Brand({ small = false }: { small?: boolean }) {
 export function ProductArt({
   item,
 }: {
-  item: Pick<Item, "art" | "images" | "title" | "is_demo">;
+  item: Pick<Item, "art" | "images" | "title"> & Partial<Pick<Item, "is_demo">>;
 }) {
   const id = useId().replace(/:/g, "");
   if (item.images.length)

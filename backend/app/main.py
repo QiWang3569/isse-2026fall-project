@@ -23,9 +23,13 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from .config import ROOT, Settings
+from .chat_email import ChatEmailRunner
 from .database import prepare_database, retire_demo_data
 from .email_auth import code_digest, new_code, normalize_pku_email, send_verification_email
 from .matching import MatchingRunner, intent_data
+from .item_lifecycle import (PUBLIC_ITEM_STATES, can_manage, change_conversation,
+                             item_capabilities, sync_conversations, validate_seller_status)
+from .search import keyword_filters
 from .retention import prune_chat
 from .needs import apply_wanted, backfill_wanted, sync_wanted, wanted_query
 from .models import ActionLog, Announcement, AnnouncementRead, ChatAttachment, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
@@ -62,6 +66,7 @@ def create_app(settings: Settings | None = None):
     factory = sessionmaker(engine, expire_on_commit=False)
     mutation_lock = threading.RLock()
     matching = MatchingRunner(factory, settings, mutation_lock)
+    chat_email = ChatEmailRunner(factory, settings)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -79,6 +84,7 @@ def create_app(settings: Settings | None = None):
         retention_task = asyncio.create_task(retention_loop())
         backfill_wanted(factory, matching, settings)
         matching.start()
+        chat_email.start()
         try:
             yield
         finally:
@@ -88,6 +94,7 @@ def create_app(settings: Settings | None = None):
             except asyncio.CancelledError:
                 pass
             matching.stop()
+            chat_email.stop()
             engine.dispose()
 
     app = FastAPI(title='燕渡 API', version='0.1.0', lifespan=lifespan)
@@ -95,6 +102,7 @@ def create_app(settings: Settings | None = None):
     app.state.session_factory = factory
     app.state.settings = settings
     app.state.matching = matching
+    app.state.chat_email = chat_email
     app.state.mutation_lock = mutation_lock
     if settings.app_env == 'production':
         from urllib.parse import urlparse
@@ -140,9 +148,11 @@ def create_app(settings: Settings | None = None):
             raise HTTPException(403, '仅管理员可执行此操作')
         return user
 
-    def get_item(db, item_id):
-        item = db.get(Item, item_id)
-        if not item or (not settings.demo_mode and item.seller_id.startswith('demo-')):
+    def get_item(db, item_id, user=None, lock=False):
+        item = (db.scalar(select(Item).where(Item.id == item_id).with_for_update().execution_options(populate_existing=True))
+                if lock else db.get(Item, item_id))
+        if (not item or (not settings.demo_mode and item.seller_id.startswith('demo-'))
+                or (item.status not in PUBLIC_ITEM_STATES and not can_manage(item, user))):
             raise HTTPException(404, '商品不存在')
         return item
 
@@ -151,6 +161,7 @@ def create_app(settings: Settings | None = None):
 
     def own_user_out(user):
         return {**user_out(user), 'email': user.email, 'bio': user.bio,
+                'email_notifications': user.email_notifications,
                 'avatar_color': user.avatar_color, 'has_password': bool(user.password_hash)} if user else None
 
     def begin_session(request, response, db, user):
@@ -165,6 +176,15 @@ def create_app(settings: Settings | None = None):
         return {'user': own_user_out(user)}
 
     def item_out(item, db, user=None):
+        if item.status not in PUBLIC_ITEM_STATES and not can_manage(item, user):
+            # Old match notifications retain their identity without exposing removed content.
+            return {'id': item.id, 'title': '商品已撤回' if item.status == 'WITHDRAWN' else '商品已被隐藏',
+                    'description': '', 'category': '', 'price': 0, 'campus': '', 'condition_grade': '',
+                    'tags': [], 'images': [], 'art': 'box', 'status': item.status,
+                    'seller': {'id': '', 'nickname': '—', 'campus': '', 'role': 'student'},
+                    'created_at': iso(item.created_at), 'expires_at': None,
+                    'is_favorite': False, 'is_owner': False, 'is_demo': False, 'sale_feedback_count': 0,
+                    'can_relist': False, 'can_withdraw': False, 'can_duplicate': False}
         seller = db.get(User, item.seller_id)
         return {'id': item.id, 'title': item.title, 'description': item.description, 'category': item.category,
                 'price': item.price_cents / 100, 'campus': item.campus, 'condition_grade': item.condition_grade,
@@ -172,6 +192,7 @@ def create_app(settings: Settings | None = None):
                 'seller': user_out(seller), 'created_at': iso(item.created_at), 'expires_at': None,
                 'is_favorite': bool(user and db.get(Favorite, (user.id, item.id))),
                 'is_owner': bool(user and user.id == item.seller_id), 'is_demo': item.id.startswith('sample-'),
+                **item_capabilities(db, item, user),
                 'sale_feedback_count': db.scalar(select(func.count()).select_from(SaleFeedback).where(
                     SaleFeedback.item_id == item.id, SaleFeedback.status == 'OPEN')) if user and user.id == item.seller_id else 0}
 
@@ -212,6 +233,7 @@ def create_app(settings: Settings | None = None):
     @app.get('/api/v1/meta')
     def meta(db: Session = Depends(get_db)):
         return {'categories': CATEGORIES, 'campuses': CAMPUSES, 'conditions': CONDITIONS,
+                'chat_email_ready': settings.chat_email_ready,
                 'demo_mode': settings.demo_mode, 'ai_mode': settings.ai_mode, 'embedding_mode': settings.embedding_mode,
                 'email_auth_ready': settings.email_auth_ready,
                 'active_items': db.scalar(select(func.count()).select_from(Item).where(Item.status == 'ACTIVE'))}
@@ -250,10 +272,14 @@ def create_app(settings: Settings | None = None):
     @app.patch('/api/v1/users/me')
     def update_profile(data: ProfileUpdate, user: User = Depends(require_user), db: Session = Depends(get_db)):
         with mutation_lock:
-            user.nickname = data.nickname
-            user.campus = data.campus
-            user.bio = data.bio
-            user.avatar_color = data.avatar_color
+            values = data.model_dump(exclude_unset=True)
+            if any(value is None for value in values.values()):
+                raise HTTPException(422, '个人资料字段不能设为空')
+            if 'email_notifications' in values:
+                if values['email_notifications'] and (user.id.startswith('demo-') or not normalize_pku_email(user.email or '')):
+                    raise HTTPException(422, '请先使用注册邮箱账号登录后开启邮件提醒')
+            for key, value in values.items():
+                setattr(user, key, value)
             db.commit()
         return {'user': own_user_out(user)}
 
@@ -454,7 +480,8 @@ def create_app(settings: Settings | None = None):
         blocked = db.get(UserBlock, (user.id, counterpart_id)) is not None or db.get(UserBlock, (counterpart_id, user.id)) is not None
         return {'id': conversation.id, 'item_id': item.id, 'buyer_id': conversation.buyer_id,
                 'seller_id': conversation.seller_id, 'item_title': item.title,
-                'item_status': item.status, 'item_image': item.images[0] if item.images else None,
+                'item_status': item.status,
+                'item_image': item.images[0] if item.images and item.status in PUBLIC_ITEM_STATES else None,
                 'counterpart': user_out(db.get(User, counterpart_id)),
                 'last_message': message_out(last_message, db) if last_message else None,
                 'unread_count': unread, 'updated_at': iso(conversation.last_message_at),
@@ -486,10 +513,14 @@ def create_app(settings: Settings | None = None):
                           .order_by(Conversation.last_message_at.desc()).limit(100)).all()
         return [conversation_out(db, row, user) for row in rows]
 
+    @app.get('/api/v1/conversations/{conversation_id}')
+    def conversation_detail(conversation_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        return conversation_out(db, owned_conversation(db, conversation_id, user), user)
+
     @app.post('/api/v1/items/{item_id}/conversations', status_code=201)
     def start_conversation(item_id: str, data: ChatMessageCreate, db: Session = Depends(get_db), user=Depends(require_user)):
         with mutation_lock:
-            item = get_item(db, item_id)
+            item = get_item(db, item_id, lock=True)
             if item.seller_id == user.id:
                 raise HTTPException(403, '不能给自己的商品发消息')
             assert_unblocked(db, user.id, item.seller_id)
@@ -585,6 +616,8 @@ def create_app(settings: Settings | None = None):
         with mutation_lock:
             conversation = owned_conversation(db, conversation_id, user)
             item = db.scalar(select(Item).where(Item.id == conversation.item_id).with_for_update().execution_options(populate_existing=True))
+            # Another connection may have changed the deal while this request waited for the item lock.
+            db.refresh(conversation)
             action, state = data.action, conversation.deal_status
             buyer = user.id == conversation.buyer_id
             transitions = {
@@ -604,15 +637,13 @@ def create_app(settings: Settings | None = None):
                 assert_unblocked(db, conversation.buyer_id, conversation.seller_id)
             if action == 'reserve':
                 item.status = 'RESERVED'
-            elif action == 'cancel' and state == 'RESERVED':
+            elif action == 'cancel' and state == 'RESERVED' and item.status == 'RESERVED':
                 item.status = 'ACTIVE'
                 if item.status == 'ACTIVE':
                     jobs = matching.enqueue_item(db, item)
             elif action == 'sold':
                 item.status = 'SOLD'
-                db.execute(update(SaleFeedback).where(SaleFeedback.item_id == item.id,
-                           SaleFeedback.status == 'OPEN').values(status='CONFIRMED'))
-            conversation.deal_status = new_state
+                sync_conversations(db, item, 'SOLD', user.id, exclude_id=conversation.id)
             deal_bodies = {
                 'request': '我已申请预订，请确认',
                 'reserve': '我已确认预订，请等待交接',
@@ -621,11 +652,7 @@ def create_app(settings: Settings | None = None):
                 'sold': '我已标记商品售出，请确认收货',
                 'confirm': '我已确认收到商品',
             }
-            notice = ChatMessage(conversation_id=conversation.id, sender_id=user.id,
-                                 body=deal_bodies[action])
-            db.add(notice)
-            db.flush()
-            conversation.last_message_at = notice.created_at
+            change_conversation(db, conversation, new_state, user.id, deal_bodies[action])
             log(db, user, 'deal.'+action, conversation.id)
             db.commit()
             result = conversation_out(db, conversation, user)
@@ -649,6 +676,8 @@ def create_app(settings: Settings | None = None):
                 query = query.where(Item.seller_id == user.id)
             if favorites:
                 query = query.join(Favorite, Favorite.item_id == Item.id).where(Favorite.user_id == user.id)
+        if not mine:
+            query = query.where(Item.status.in_(PUBLIC_ITEM_STATES))
         if on_sale:
             query = query.where(Item.status == 'ACTIVE')
         if category:
@@ -661,11 +690,7 @@ def create_app(settings: Settings | None = None):
             query = query.where(Item.price_cents <= round(max_price * 100))
         if condition_grade:
             query = query.where(Item.condition_grade == condition_grade)
-        if q.strip():
-            for word in q.strip().split():
-                aliases = [word, normalize(word)]
-                aliases.extend(FEATURES.get(normalize(word), []))
-                query = query.where(or_(*(column.contains(w, autoescape=True) for column in [Item.title, Item.description] for w in aliases)))
+        query = query.where(*keyword_filters(q, Item.title, Item.description))
         total = db.scalar(select(func.count()).select_from(query.subquery()))
         status_rank = case(
             (Item.status == 'ACTIVE', 0),
@@ -757,7 +782,7 @@ def create_app(settings: Settings | None = None):
 
     @app.get('/api/v1/items/{item_id}')
     def item_detail(item_id: str, db: Session = Depends(get_db), user=Depends(current_user)):
-        return item_out(get_item(db, item_id), db, user)
+        return item_out(get_item(db, item_id, user), db, user)
 
     def save_image(file, user, db, private=False):
         raw = file.file.read(6*1024*1024+1)
@@ -921,8 +946,8 @@ def create_app(settings: Settings | None = None):
                 raise HTTPException(404, '商品不存在')
             if item.seller_id != user.id:
                 raise HTTPException(403, '只能修改自己发布的商品')
-            if item.status in {'SOLD', 'BANNED'}:
-                raise HTTPException(409, '已售出或审核隐藏的商品不能编辑')
+            if item.status not in {'ACTIVE', 'RESERVED', 'EXPIRED'}:
+                raise HTTPException(409, '已售出、审核隐藏或已撤回的商品不能编辑')
             values = data.model_dump(exclude_unset=True)
             if any(value is None for value in values.values()):
                 raise HTTPException(422, '商品字段不能设为 null')
@@ -952,27 +977,11 @@ def create_app(settings: Settings | None = None):
                 raise HTTPException(404, '商品不存在')
             if item.seller_id != user.id:
                 raise HTTPException(403, '只能修改自己发布的商品')
-            if item.status == 'BANNED':
-                raise HTTPException(409, '审核隐藏的商品不能由卖家重新上架')
-            if data.status == 'RESERVED' and item.status == 'ACTIVE' and db.scalar(
-                    select(Conversation).where(Conversation.item_id == item.id,
-                                               Conversation.deal_status == 'REQUESTED')):
-                raise HTTPException(409, '已有买家申请预订，请先在站内消息中确认或拒绝')
-            if item.status == 'RESERVED' and data.status != 'RESERVED':
-                for conversation in db.scalars(select(Conversation).where(Conversation.item_id == item.id,
-                                        Conversation.deal_status == 'RESERVED')):
-                    conversation.deal_status = 'SOLD' if data.status == 'SOLD' else 'CANCELED'
-            if data.status == 'RESERVED':
-                other = db.scalar(select(Conversation).where(Conversation.item_id == item.id,
-                                  Conversation.deal_status == 'RESERVED'))
-                if other and item.status != 'RESERVED':
-                    raise HTTPException(409, '已有买家预订，请先处理该交易')
+            validate_seller_status(db, item, data.status)
+            if item.status == data.status:
+                return item_out(item, db, user)
+            sync_conversations(db, item, data.status, user.id)
             item.status = data.status
-            if data.status == 'SOLD':
-                db.execute(update(SaleFeedback).where(SaleFeedback.item_id == item.id,
-                           SaleFeedback.status == 'OPEN').values(status='CONFIRMED'))
-                db.execute(update(Conversation).where(Conversation.item_id == item.id,
-                           Conversation.deal_status == 'REQUESTED').values(deal_status='DECLINED'))
             db.flush()
             jobs = matching.enqueue_item(db, item) if data.status == 'ACTIVE' else []
             log(db, user, 'item.status', item.id, data.status)
@@ -981,10 +990,52 @@ def create_app(settings: Settings | None = None):
             matching.run_or_wake(job_id)
         return item_out(item, db, user)
 
+    @app.delete('/api/v1/items/{item_id}')
+    def withdraw_item(item_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            item = db.scalar(select(Item).where(Item.id == item_id).with_for_update().execution_options(populate_existing=True))
+            if not item:
+                raise HTTPException(404, '商品不存在')
+            if item.seller_id != user.id:
+                raise HTTPException(403, '只能撤回自己发布的商品')
+            if item.status == 'WITHDRAWN':
+                return item_out(item, db, user)
+            if not item_capabilities(db, item, user)['can_withdraw']:
+                raise HTTPException(409, '请先处理预订或待确认交易；审核隐藏的商品不能撤回')
+            item.status = 'WITHDRAWN'
+            db.execute(update(SaleFeedback).where(SaleFeedback.item_id == item.id,
+                       SaleFeedback.status == 'OPEN').values(status='DISMISSED'))
+            log(db, user, 'item.withdraw', item.id)
+            db.commit()
+        return item_out(item, db, user)
+
+    @app.post('/api/v1/items/{item_id}/duplicate', status_code=201)
+    def duplicate_item(item_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+        with mutation_lock:
+            db.scalar(select(User).where(User.id == user.id).with_for_update())
+            item = db.scalar(select(Item).where(Item.id == item_id).with_for_update().execution_options(populate_existing=True))
+            if not item:
+                raise HTTPException(404, '商品不存在')
+            if item.seller_id != user.id:
+                raise HTTPException(403, '只能复制自己发布的商品')
+            if not item_capabilities(db, item, user)['can_duplicate']:
+                raise HTTPException(409, '交易确认完成后才可以再发一件')
+            if db.scalar(select(func.count()).select_from(ItemDraft).where(ItemDraft.seller_id == user.id)) >= 50:
+                raise HTTPException(409, '待发布商品最多保存 50 件，请先发布或删除部分草稿')
+            draft = ItemDraft(seller_id=user.id, raw=item.description, title=item.title,
+                              description=item.description, category=item.category, price_cents=item.price_cents,
+                              campus=item.campus, condition_grade=item.condition_grade, tags=list(item.tags),
+                              images=[path for path in item.images if (upload := db.get(Upload, path)) and upload.user_id == user.id])
+            db.add(draft)
+            db.flush()
+            log(db, user, 'item.duplicate', item.id, draft.id)
+            db.commit()
+        return draft_out(draft)
+
     @app.post('/api/v1/items/{item_id}/sale-feedback', status_code=201)
     def create_sale_feedback(item_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
         with mutation_lock:
-            item = get_item(db, item_id)
+            item = get_item(db, item_id, lock=True)
             if item.seller_id == user.id:
                 raise HTTPException(403, '不能反馈自己的商品')
             if item.status not in {'ACTIVE', 'RESERVED'}:
@@ -1001,7 +1052,7 @@ def create_app(settings: Settings | None = None):
 
     @app.get('/api/v1/items/{item_id}/sale-feedback')
     def sale_feedback_list(item_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
-        item = get_item(db, item_id)
+        item = get_item(db, item_id, user)
         if item.seller_id != user.id:
             raise HTTPException(403, '仅卖家可查看反馈')
         return [{'id': row.id, 'status': row.status, 'created_at': iso(row.created_at)}
@@ -1023,7 +1074,7 @@ def create_app(settings: Settings | None = None):
         if data.action not in {'sold', 'decline'}:
             raise HTTPException(422, '请选择确认售出或驳回反馈')
         with mutation_lock:
-            item = get_item(db, item_id)
+            item = get_item(db, item_id, user, lock=True)
             if item.seller_id != user.id:
                 raise HTTPException(403, '仅卖家可处理反馈')
             feedback = db.get(SaleFeedback, feedback_id)
@@ -1033,13 +1084,8 @@ def create_app(settings: Settings | None = None):
             if data.action == 'sold':
                 if item.status not in {'ACTIVE', 'RESERVED'}:
                     raise HTTPException(409, '商品当前不可确认售出')
+                sync_conversations(db, item, 'SOLD', user.id)
                 item.status = 'SOLD'
-                db.execute(update(SaleFeedback).where(SaleFeedback.item_id == item.id,
-                           SaleFeedback.status == 'OPEN').values(status='CONFIRMED'))
-                db.execute(update(Conversation).where(Conversation.item_id == item.id,
-                           Conversation.deal_status == 'RESERVED').values(deal_status='SOLD'))
-                db.execute(update(Conversation).where(Conversation.item_id == item.id,
-                           Conversation.deal_status == 'REQUESTED').values(deal_status='DECLINED'))
             log(db, user, 'sale.feedback.'+data.action, feedback.id)
             db.commit()
         return item_out(item, db, user)
@@ -1212,10 +1258,18 @@ def create_app(settings: Settings | None = None):
             owned_intent(db, intent_id, user)
             query = query.where(Notification.intent_id == intent_id)
         rows = db.scalars(query.order_by(Notification.created_at.desc()).limit(100))
-        return [{'id': n.id, 'intent_id': n.intent_id, 'item': item_out(db.get(Item, n.item_id), db, user),
-                 'score': n.score, 'reason': n.reason, 'verdict': n.verdict, 'questions': n.questions,
-                 'evidence': n.evidence, 'review_mode': n.review_mode, 'score_kind': 'embedding_similarity' if db.get(Intent, n.intent_id).embedding_model != 'local-keyword' else 'keyword_coverage', 'is_read': n.is_read, 'created_at': iso(n.created_at),
-                 'available': db.get(Item, n.item_id).status == 'ACTIVE'} for n in rows]
+        result = []
+        for n in rows:
+            item = db.get(Item, n.item_id)
+            hidden = item.status not in PUBLIC_ITEM_STATES and not can_manage(item, user)
+            result.append({'id': n.id, 'intent_id': n.intent_id, 'item': item_out(item, db, user),
+                           'score': n.score, 'reason': '商品已停止展示' if hidden else n.reason,
+                           'verdict': n.verdict, 'questions': [] if hidden else n.questions,
+                           'evidence': [] if hidden else n.evidence, 'review_mode': n.review_mode,
+                           'score_kind': 'embedding_similarity' if db.get(Intent, n.intent_id).embedding_model != 'local-keyword' else 'keyword_coverage',
+                           'is_read': n.is_read, 'created_at': iso(n.created_at),
+                           'available': item.status == 'ACTIVE'})
+        return result
 
     @app.patch('/api/v1/notifications/{notification_id}/read')
     def read_notice(notification_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
@@ -1252,7 +1306,7 @@ def create_app(settings: Settings | None = None):
         return intent
 
     @app.get('/api/v1/wanted/')
-    def wanted_list(mine: bool = False, q: str = Query('', max_length=100),
+    def wanted_list(mine: bool = False, q: str = Query('', max_length=120),
                     db: Session = Depends(get_db), user=Depends(current_user)):
         query = select(Wanted)
         if not settings.demo_mode:
@@ -1263,10 +1317,7 @@ def create_app(settings: Settings | None = None):
             query = query.where(Wanted.buyer_id == user.id)
         else:
             query = query.where(Wanted.status == 'ACTIVE')
-        keyword = q.strip().lower()
-        if keyword:
-            query = query.where(or_(func.lower(Wanted.title).contains(keyword, autoescape=True),
-                                    func.lower(Wanted.description).contains(keyword, autoescape=True)))
+        query = query.where(*keyword_filters(q, Wanted.title, Wanted.description))
         rows = db.scalars(query.order_by(Wanted.created_at.desc()).limit(100))
         return [wanted_out(w, db, user) for w in rows]
 
@@ -1337,7 +1388,8 @@ def create_app(settings: Settings | None = None):
         return wanted_out(wanted, db, user)
 
     @app.post('/api/v1/wanted/{wanted_id}/renew')
-    def wanted_renew(wanted_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+    def wanted_renew(wanted_id: str,
+                     db: Session = Depends(get_db), user=Depends(require_user)):
         with mutation_lock:
             wanted = owned_wanted(db, wanted_id, user)
             if wanted.status == 'ACTIVE':
@@ -1421,13 +1473,10 @@ def create_app(settings: Settings | None = None):
                 raise HTTPException(404, '举报不存在')
             item = db.scalar(select(Item).where(Item.id == report.item_id).with_for_update().execution_options(populate_existing=True))
             if data.action == 'hide':
-                if item.status == 'SOLD':
-                    raise HTTPException(409, '已售商品不能隐藏后重新上架')
+                if item.status in {'SOLD', 'WITHDRAWN'}:
+                    raise HTTPException(409, '已售或已撤回的商品不能隐藏后重新上架')
                 item.status = 'BANNED'
-                db.execute(update(Conversation).where(Conversation.item_id == item.id,
-                           Conversation.deal_status == 'RESERVED').values(deal_status='CANCELED'))
-                db.execute(update(Conversation).where(Conversation.item_id == item.id,
-                           Conversation.deal_status == 'REQUESTED').values(deal_status='DECLINED'))
+                sync_conversations(db, item, 'BANNED', user.id)
             elif data.action == 'restore':
                 if item.status != 'BANNED':
                     raise HTTPException(409, '仅可恢复审核隐藏的商品')

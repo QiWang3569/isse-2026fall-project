@@ -182,10 +182,11 @@ class PasswordSet(PasswordLogin):
 
 
 class ProfileUpdate(StrictModel):
-    nickname: str = Field(min_length=2, max_length=50)
-    campus: str
-    bio: str = Field(default='', max_length=160)
-    avatar_color: Literal['sage', 'blue', 'peach', 'lavender'] = 'sage'
+    email_notifications: bool | None = Field(default=None, strict=True)
+    nickname: str | None = Field(default=None, min_length=2, max_length=50)
+    campus: str | None = None
+    bio: str | None = Field(default=None, max_length=160)
+    avatar_color: Literal['sage', 'blue', 'peach', 'lavender'] | None = None
 
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
 

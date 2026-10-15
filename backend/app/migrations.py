@@ -8,6 +8,7 @@ from .models import Base, Wanted
 def upgrade_buyer_agent(engine):
     additions = {
         'users': {'email': 'VARCHAR(254)', 'password_hash': 'VARCHAR(255)',
+                  'email_notifications': 'BOOLEAN NOT NULL DEFAULT FALSE',
                   'bio': "VARCHAR(160) NOT NULL DEFAULT ''",
                   'avatar_color': "VARCHAR(20) NOT NULL DEFAULT 'sage'"},
         'buyer_intents': {'excluded_keywords': "JSON NOT NULL DEFAULT '[]'",
@@ -28,6 +29,10 @@ def upgrade_buyer_agent(engine):
                 if name not in existing:
                     conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}'))
         conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email ON users (email)'))
+        # Change future inserts only. Existing preferences, including opt-outs,
+        # must survive every subsequent application startup.
+        if engine.dialect.name == 'postgresql':
+            conn.execute(text('ALTER TABLE users ALTER COLUMN email_notifications SET DEFAULT TRUE'))
 
 
 def upgrade_marketplace(engine):
@@ -44,12 +49,25 @@ def upgrade_marketplace(engine):
         columns = {column['name']: column for column in inspect(conn).get_columns('wanted_posts')}
         if 'intent_id' not in columns:
             conn.execute(text('ALTER TABLE wanted_posts ADD COLUMN intent_id VARCHAR(36) REFERENCES buyer_intents(id)'))
+        if 'wanted_watches' in inspect(conn).get_table_names():
+            # Convert the local opt-in association before SQLite rebuilds wanted_posts.
+            # Retain the original task and its match history instead of backfilling a duplicate.
+            conn.execute(text('''UPDATE wanted_posts SET intent_id = (
+                SELECT w.intent_id FROM wanted_watches w JOIN buyer_intents i ON i.id = w.intent_id
+                WHERE w.wanted_id = wanted_posts.id AND i.buyer_id = wanted_posts.buyer_id
+            ) WHERE intent_id IS NULL'''))
+            conn.execute(text("""UPDATE buyer_intents SET status='COMPLETED' WHERE id IN
+                (SELECT intent_id FROM wanted_posts WHERE status NOT IN ('ACTIVE', 'PAUSED'))"""))
+            conn.execute(text('''UPDATE wanted_posts SET status =
+                (SELECT status FROM buyer_intents WHERE id = wanted_posts.intent_id)
+                WHERE intent_id IS NOT NULL'''))
+            conn.execute(text('DROP TABLE wanted_watches'))
         if any(not columns[name]['nullable'] for name in ('category', 'budget_cents')):
             if engine.dialect.name == 'postgresql':
                 for name in ('category', 'budget_cents'):
                     conn.execute(text(f'ALTER TABLE wanted_posts ALTER COLUMN {name} DROP NOT NULL'))
             else:
-                # SQLite cannot change nullability in place. No table refers to wanted_posts.
+                # The legacy association was converted above; no table now refers to wanted_posts.
                 metadata = type(Base.metadata)()
                 for table in Base.metadata.sorted_tables:
                     table.to_metadata(metadata)

@@ -181,7 +181,8 @@ def test_reported_image_can_be_moderated_and_hidden_from_participants(client):
     assert client.get(image).status_code == 200
     assert client.post(f"/api/v1/admin/chat-reports/{report.json()['id']}/review", json={'action': 'hide', 'note': '已核实图片不适当', 'confirmed': True}).status_code == 200
     login(client)
-    hidden = client.get(f'/api/v1/conversations/{conversation_id}/messages').json()['messages'][-1]
+    hidden = next(row for row in client.get(f'/api/v1/conversations/{conversation_id}/messages').json()['messages']
+                  if row['id'] == message['id'])
     assert hidden['hidden'] and hidden['images'] == []
     assert client.get(image).status_code == 404
     login(client, 'seller')

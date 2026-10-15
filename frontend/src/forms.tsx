@@ -234,7 +234,7 @@ export function PublishWorkspace({ meta, onDone, onDraftPublished }: Common & { 
       const imported = await api<ItemDraft[]>("/item-drafts/import", "POST", { text: source });
       setDrafts((existing) => [...imported, ...existing]);
       setSource("");
-      setNotice(`已导入 ${imported.length} 件待发布商品。请逐件核对并上传照片。`);
+      setNotice(`已导入 ${imported.length} 件待发布商品。请逐件核对，可按需补充照片。`);
       setTab("drafts");
     } catch (e) {
       setError((e as Error).message);

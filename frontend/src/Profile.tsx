@@ -152,12 +152,15 @@ export function ProfileHome({
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingNotifications, setSavingNotifications] = useState(false);
+  const [notificationEnabled, setNotificationEnabled] = useState(Boolean(user.email_notifications));
   const [nickname, setNickname] = useState(user.nickname);
   const [campus, setCampus] = useState(user.campus);
   const [bio, setBio] = useState(user.bio ?? "");
   const [color, setColor] = useState(user.avatar_color ?? "sage");
   useEffect(() => {
     setNickname(user.nickname);
+    setNotificationEnabled(Boolean(user.email_notifications));
     setCampus(user.campus);
     setBio(user.bio ?? "");
     setColor(user.avatar_color ?? "sage");
@@ -234,6 +237,26 @@ export function ProfileHome({
             账号设置
           </button>
         </div>
+      </section>
+      <section className="notification-settings" aria-label="消息提醒设置">
+        <label className="check-label">
+          <input type="checkbox" checked={notificationEnabled} disabled={!user.email || savingNotifications}
+            onChange={async (event) => {
+              const enabled = event.target.checked;
+              setNotificationEnabled(enabled);
+              setSavingNotifications(true);
+              try {
+                const result = await api<{ user: User }>("/users/me", "PATCH", { email_notifications: enabled });
+                onUpdated(result.user);
+              } catch (error) { setNotificationEnabled(Boolean(user.email_notifications)); onError((error as Error).message); }
+              finally { setSavingNotifications(false); }
+            }} />
+          未读站内信邮件提醒
+        </label>
+        <p className="hint">{user.email
+          ? `消息持续未读约 5 分钟后发往注册邮箱 ${user.email}，同一会话合并提醒。`
+          : "演示账号没有注册邮箱，使用已验证的邮箱账号后可开启提醒。"}</p>
+        {user.email && !meta.chat_email_ready && <p className="hint">邮件提醒服务尚未启用；设置会保存，服务启用后生效。</p>}
       </section>
       <div className="profile-section-heading">
         <div>

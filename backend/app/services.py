@@ -209,9 +209,9 @@ def seed(db: Session):
     if db.get(User, 'demo-buyer'):
         return
     db.add_all([
-        User(id='demo-buyer', nickname='林同学', campus='燕园校本部', contact='演示账号，不提供真实联系方式'),
-        User(id='demo-seller', nickname='许同学', campus='万柳学区', contact='演示账号，不提供真实联系方式'),
-        User(id='demo-admin', nickname='管理员', campus='燕园校本部', role='admin'),
+        User(id='demo-buyer', nickname='林同学', campus='燕园校本部', contact='演示账号，不提供真实联系方式', email_notifications=False),
+        User(id='demo-seller', nickname='许同学', campus='万柳学区', contact='演示账号，不提供真实联系方式', email_notifications=False),
+        User(id='demo-admin', nickname='管理员', campus='燕园校本部', role='admin', email_notifications=False),
     ])
     db.flush()
     samples = [

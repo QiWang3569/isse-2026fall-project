@@ -45,7 +45,8 @@ def test_chat_report_review_and_blocking(client):
     assert client.post(review_path, json={'action': 'hide', 'note': '再次处理同一消息', 'confirmed': True}).status_code == 409
     login(client, 'buyer')
     messages = client.get(f'/api/v1/conversations/{conversation_id}/messages').json()['messages']
-    assert messages[-1]['hidden'] and '转账' not in messages[-1]['body']
+    reviewed = next(message for message in messages if message['id'] == reply)
+    assert reviewed['hidden'] and '转账' not in reviewed['body']
     assert client.delete(f'/api/v1/conversations/{conversation_id}/block').status_code == 200
     assert client.post(f'/api/v1/conversations/{conversation_id}/messages', json={'body': '我会当面核实'}).status_code == 201
 

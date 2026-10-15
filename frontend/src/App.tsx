@@ -29,7 +29,6 @@ import {
   Pause,
   Play,
   Plus,
-  Search,
   ShieldCheck,
   Shirt,
   Sparkles,
@@ -50,6 +49,7 @@ import {
   api,
   type User,
   type Item,
+  type ItemDraft,
   type Meta,
   type Intent,
   type Parsed,
@@ -79,6 +79,7 @@ import {
 import { IntentForm, PublishForm, PublishWorkspace, WantedForm } from "./forms";
 import { AuthMethods, ChatCenter, PasswordSetup } from "./AccountAndChat";
 import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
+import { SearchBar } from "./SearchBar";
 
 const nav = [
   { key: "market", label: "逛逛校园", icon: Compass },
@@ -112,8 +113,12 @@ const validViews = [
   "admin-logs",
 ];
 function currentView(): View {
-  const v = location.hash.slice(1);
+  const v = location.hash.slice(1).split("/")[0];
   return (validViews.includes(v) ? v : "market") as View;
+}
+function currentConversation(): string | null {
+  const match = /^#messages\/([A-Za-z0-9_-]+)$/.exec(location.hash);
+  return match?.[1] ?? null;
 }
 
 function initialTheme(): "light" | "dark" {
@@ -197,11 +202,13 @@ export default function App() {
     [selected, setSelected] = useState<Item | null>(null),
     [compare, setCompare] = useState<Item[]>([]);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [detailFromChat, setDetailFromChat] = useState(false);
+  const [copiedDraft, setCopiedDraft] = useState<ItemDraft | null>(null);
   const [editingWanted, setEditingWanted] = useState<Wanted | null>(null);
   const [editingIntent, setEditingIntent] = useState<Intent | null>(null);
   const [publishingIntent, setPublishingIntent] = useState<Intent | null>(null);
-  const [wantedSearch, setWantedSearch] = useState(""),
-    [wantedQuery, setWantedQuery] = useState("");
+  const [pendingConversation, setPendingConversation] = useState(currentConversation);
+  const consumeConversation = useCallback(() => setPendingConversation(null), []);
   const [notices, setNotices] = useState<Notice[]>([]),
     [prefill, setPrefill] = useState<Wanted | null>(null);
   const [noticeIntent, setNoticeIntent] = useState<Intent | null>(null);
@@ -329,6 +336,7 @@ export default function App() {
   useEffect(() => {
     const listener = () => {
       setView(currentView());
+      setPendingConversation(currentConversation());
       setPage(1);
     };
     window.addEventListener("hashchange", listener);
@@ -385,9 +393,15 @@ export default function App() {
   }, []);
   const navigate = (v: View) => {
     location.hash = v;
+    setPendingConversation(null);
     setView(v);
     setPage(1);
     setOnSale(v === "market");
+    if (v === "wanted") {
+      setSmartMode(false);
+      setSmartQuery("");
+      setSmartResult(null);
+    }
   };
   const needUser = () => {
     if (!user) {
@@ -405,7 +419,13 @@ export default function App() {
   function signedIn(account: User) {
     setUser(account);
     setCompare([]);
-    if (selected) {
+    const conversationId = currentConversation();
+    setPendingConversation(conversationId);
+    if (conversationId) {
+      setModal(null);
+      setChatItem(null);
+      setChatDraft("");
+    } else if (selected) {
       void api<Item>(`/items/${selected.id}`).then((item) => {
         setSelected(item);
         setModal("detail");
@@ -429,14 +449,19 @@ export default function App() {
     if (!needUser()) return;
     if (type === "intent") { setIntentQuery(text); setEditingIntent(null); }
     if (type === "wanted") { setEditingWanted(null); setPublishingIntent(null); }
-    if (type === "publish") setPrefill(null);
+    if (type === "publish") {
+      setPrefill(null);
+      setEditingItem(null);
+      setCopiedDraft(null);
+    }
     setModal(type);
   }
-  async function openItem(item: Item) {
+  async function openItem(item: Pick<Item, "id">, fromChat = false) {
     setReporting(false);
     setReportText("");
     try {
       const fresh = await api<Item>("/items/" + item.id);
+      setDetailFromChat(fromChat);
       setSelected(fresh);
       setModal("detail");
     } catch (e) {
@@ -477,21 +502,47 @@ export default function App() {
   }
   function searchSubmit(e: FormEvent) {
     e.preventDefault();
-    if (smartMode && search.trim()) {
-      setQuery("");
-      setSmartQuery(search.trim());
+    const nextQuery = search.trim().replace(/\s+/g, " ");
+    setSearch(nextQuery);
+    setQuery(nextQuery);
+    if (view !== "wanted" && smartMode && nextQuery) {
+      setSmartQuery(nextQuery);
       setSmartPage(1);
       setSmartResult(null);
       setSmartError("");
     } else {
-      setQuery(search);
       setSmartQuery("");
       setSmartResult(null);
       setPage(1);
     }
-    navigate("market");
+    navigate(view === "wanted" ? "wanted" : "market");
     setSearchRequest((value) => value + 1);
   }
+  function clearSearch() {
+    setSearch("");
+    setQuery("");
+    setSmartQuery("");
+    setSmartResult(null);
+    setSmartError("");
+    setPage(1);
+    setSmartPage(1);
+  }
+  const searchBarProps = {
+    target: view === "wanted" ? "wanted" as const : "market" as const,
+    value: search,
+    showClear: Boolean(search || query || (view !== "wanted" && smartQuery)),
+    smartMode,
+    onChange: setSearch,
+    onSubmit: searchSubmit,
+    onClear: clearSearch,
+    onToggleSmart: () => {
+      setSmartMode(!smartMode);
+      if (smartMode) {
+        setSmartQuery("");
+        setSmartResult(null);
+      }
+    },
+  };
   const listParams = new URLSearchParams({
     q: query,
     category,
@@ -517,7 +568,7 @@ export default function App() {
     true,
   );
   const wanted = useResource<Wanted[]>(
-    "/wanted/?" + new URLSearchParams({ q: wantedQuery }).toString(),
+    "/wanted/?" + new URLSearchParams({ q: query }).toString(),
     revision,
     view === "wanted",
   );
@@ -690,8 +741,6 @@ export default function App() {
               className={`nav-item ${view === key || (key === "profile" && personalView) ? "active" : ""}`}
               onClick={() => {
                 setCategory("");
-                setQuery("");
-                setSearch("");
                 setPrice("");
                 navigate(key as View);
               }}
@@ -739,36 +788,7 @@ export default function App() {
           <div className="mobile-brand">
             <Brand small />
           </div>
-          <form className="global-search" onSubmit={searchSubmit}>
-            <Search size={19} />
-            <input
-              aria-label="搜索校园好物"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={
-                smartMode
-                  ? "说人话就能搜：如“2000左右能记笔记的平板”"
-                  : "搜搜你需要的校园好物…"
-              }
-            />
-            <kbd>Enter</kbd>
-            <button
-              className={`smart-toggle ${smartMode ? "active" : ""}`}
-              type="button"
-              aria-pressed={smartMode}
-              title={smartMode ? "关闭智能搜索" : "开启智能搜索"}
-              onClick={() => {
-                setSmartMode(!smartMode);
-                if (smartMode) {
-                  setSmartQuery("");
-                  setSmartResult(null);
-                }
-              }}
-            >
-              <Sparkles size={16} />
-              <span>智能</span>
-            </button>
-          </form>
+          <SearchBar {...searchBarProps} />
           <div className="top-actions">
             <button className="icon-button theme-toggle" type="button"
               aria-label={theme === "dark" ? "切换到日间模式" : "切换到夜间模式"}
@@ -862,40 +882,7 @@ export default function App() {
             onAutoEditConsumed={() => setEditProfile(false)}
           /> : <Empty title="登录后查看个人主页" text="使用北大邮箱登录，集中管理你的代蹲、消息、收藏与发布。"
             action="登录或注册" onAction={() => setModal("login")} />)}
-          {view === "market" && (
-            <form className="mobile-search" onSubmit={searchSubmit}>
-              <Search size={18} />
-              <input
-                aria-label="手机端搜索校园好物"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={
-                  smartMode
-                    ? "说人话就能搜，例如：没划痕的线代"
-                    : "搜索物品、教材或型号…"
-                }
-              />
-              <button
-                className={`smart-toggle ${smartMode ? "active" : ""}`}
-                type="button"
-                aria-pressed={smartMode}
-                title={smartMode ? "关闭智能搜索" : "开启智能搜索"}
-                onClick={() => {
-                  setSmartMode(!smartMode);
-                  if (smartMode) {
-                    setSmartQuery("");
-                    setSmartResult(null);
-                  }
-                }}
-              >
-                <Sparkles size={15} />
-                智能
-              </button>
-              <button type="submit" className="text-button">
-                搜索
-              </button>
-            </form>
-          )}
+          {(view === "market" || view === "wanted") && <SearchBar {...searchBarProps} mobile />}
           {view === "market" && (
             <>
               <section className="hero">
@@ -1275,17 +1262,6 @@ export default function App() {
                       <option value="500">500 元以内</option>
                     </select>
                   </label>
-                  {query && (
-                    <button
-                      className="query-tag"
-                      onClick={() => {
-                        setQuery("");
-                        setSearch("");
-                      }}
-                    >
-                      “{query}”<X size={13} />
-                    </button>
-                  )}
                   <label>
                     <span className="sr-only">售卖状态</span>
                     <select
@@ -1299,6 +1275,14 @@ export default function App() {
                       <option value="all">所有好物</option>
                     </select>
                   </label>
+                  {query && (
+                    <button
+                      className="query-tag"
+                      onClick={clearSearch}
+                    >
+                      “{query}”<X size={13} />
+                    </button>
+                  )}
                 </div>
                 <label className="sort-picker">
                   <ArrowDownUp size={14} />
@@ -1317,6 +1301,7 @@ export default function App() {
                   </select>
                 </label>
               </div>
+              {query && <p className="search-rule">多个关键词用空格分隔，结果需同时包含所有关键词。</p>}
               {!user && view !== "market" ? (
                 <Empty
                   title="登录后，继续你的校园之旅"
@@ -1374,26 +1359,26 @@ export default function App() {
               ) : (
                 <Empty
                   title={
-                    view === "favorites"
+                    query ? "没有找到匹配的好物" : view === "favorites"
                       ? "把喜欢的好物，先收藏起来"
                       : view === "mine"
                         ? "你的第一件闲置，还在等待出发"
                         : "暂时没有合适的好物"
                   }
                   text={
-                    view === "market"
+                    query ? "换个关键词试试，或清空搜索查看好物。" : view === "market"
                       ? "换个筛选条件，或留下求购，让有闲置的同学找到你。"
                       : "每一件物品，都值得一段新的故事。"
                   }
                   action={
-                    view === "market"
+                    query ? "清空搜索" : view === "market"
                       ? "发布求购"
                       : view === "mine"
                         ? "发布闲置"
                         : "去逛逛校园"
                   }
                   onAction={() =>
-                    view === "market"
+                    query ? clearSearch() : view === "market"
                       ? openForm("wanted")
                       : view === "mine"
                         ? openForm("publish")
@@ -1588,41 +1573,10 @@ export default function App() {
                   发布求购
                 </button>
               </Intro>
-              <form
-                className="wanted-search"
-                role="search"
-                aria-label="搜索求购"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  setWantedQuery(wantedSearch.trim());
-                }}
-              >
-                <Search size={18} aria-hidden="true" />
-                <input
-                  type="search"
-                  aria-label="求购关键词"
-                  placeholder="搜索求购标题或描述…"
-                  maxLength={100}
-                  value={wantedSearch}
-                  onChange={(e) => setWantedSearch(e.target.value)}
-                />
-                {(wantedSearch || wantedQuery) && (
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => {
-                      setWantedSearch("");
-                      setWantedQuery("");
-                    }}
-                  >
-                    清空
-                  </button>
-                )}
-                <button type="submit" className="button primary">搜索</button>
-              </form>
-              {wantedQuery && !wanted.loading && !wanted.error && (
+              <p className="search-rule">多个关键词用空格分隔，结果需同时包含所有关键词。</p>
+              {query && !wanted.loading && !wanted.error && (
                 <p className="wanted-search-summary" role="status">
-                  “{wantedQuery}”的搜索结果：显示 {wanted.data?.length ?? 0} 条求购
+                  “{query}”的搜索结果：显示 {wanted.data?.length ?? 0} 条求购
                 </p>
               )}
               {wanted.loading ? (
@@ -1674,12 +1628,7 @@ export default function App() {
                             <button
                               className="text-button"
                               disabled={busy}
-                              onClick={() =>
-                                void operate(
-                                  () => api(`/wanted/${w.id}`, "DELETE"),
-                                  "求购已结束",
-                                )
-                              }
+                              onClick={() => void operate(() => api(`/wanted/${w.id}`, "DELETE"), "求购与代蹲已一起结束")}
                             >
                               我已找到
                               <Check size={15} />
@@ -1705,13 +1654,12 @@ export default function App() {
                 </div>
               ) : (
                 <Empty
-                  title={wantedQuery ? "没有找到匹配的求购" : "第一个心愿，由你开始"}
-                  text={wantedQuery ? "换个关键词试试，或清空搜索查看全部求购。" : "写下想找的物品，让同学们帮你留意。"}
-                  action={wantedQuery ? "清空搜索" : "发布求购"}
+                  title={query ? "没有找到匹配的求购" : "第一个心愿，由你开始"}
+                  text={query ? "换个关键词试试，或清空搜索查看全部求购。" : "写下想找的物品，让同学们帮你留意。"}
+                  action={query ? "清空搜索" : "发布求购"}
                   onAction={() => {
-                    if (wantedQuery) {
-                      setWantedSearch("");
-                      setWantedQuery("");
+                    if (query) {
+                      clearSearch();
                     } else {
                       openForm("wanted");
                     }
@@ -1791,8 +1739,11 @@ export default function App() {
             </>
           )}
           {view === "messages" && (user ? (
-            <ChatCenter user={user} conversations={conversations.data ?? []}
+            <ChatCenter key={user.id} user={user} conversations={conversations.data ?? []}
               initialItem={chatItem} initialDraft={chatDraft}
+              initialConversationId={pendingConversation}
+              onConversationOpened={consumeConversation}
+              onOpenItem={(id) => void openItem({ id }, true)}
               onStarted={() => { setChatItem(null); setChatDraft(""); }} refresh={refresh} />
           ) : (
             <Empty title="登录后查看站内消息" text="通过北大邮箱验证后，就能和商品发布者沟通。"
@@ -1931,7 +1882,8 @@ export default function App() {
                     setUser(null);
                     setModal(null);
                     setCompare([]);
-                    navigate("market");
+                    if (currentConversation()) setModal("login");
+                    else navigate("market");
                   }, "已退出账号")
                 }
               >
@@ -1960,15 +1912,18 @@ export default function App() {
       )}
       {modal === "publish" && (
         <Modal
-          title={editingItem ? "编辑发布的商品" : "让闲置，开启下一段故事"}
+          title={editingItem ? "编辑发布的商品" : copiedDraft ? "再发一件：核对并发布" : "让闲置，开启下一段故事"}
           onClose={() => {
             setModal(null);
             setEditingItem(null);
+            setCopiedDraft(null);
           }}
         >
-          {(editingItem || prefill ? <PublishForm meta={meta} prefill={prefill} editingItem={editingItem} onDone={() => {
+          {(editingItem || prefill || copiedDraft ? <PublishForm key={editingItem?.id ?? copiedDraft?.id ?? prefill?.id} meta={meta} prefill={prefill} editingItem={editingItem} draft={copiedDraft}
+            onDraftSaved={() => { setCopiedDraft(null); setModal(null); setToast("草稿已保存，可在发布中的待发布列表继续完善"); refresh(); }} onDone={() => {
               setModal(null);
               setEditingItem(null);
+              setCopiedDraft(null);
               setToast(editingItem ? "商品信息已更新" : "好物发布成功，已为有需要的同学进行匹配");
               refresh();
               navigate("mine");
@@ -2203,6 +2158,7 @@ export default function App() {
       )}
       {modal === "detail" && selected && (
         <Modal title="好物详情" onClose={() => setModal(null)} style={{ width: 850 }}>
+          {detailFromChat && <button type="button" className="text-button detail-chat-back" onClick={() => setModal(null)}><ChevronLeft size={16} />返回聊天</button>}
           <div className="detail-grid">
             <div>
               <ProductArt item={selected} />
@@ -2265,11 +2221,13 @@ export default function App() {
                       setSelected(await api<Item>(`/items/${selected.id}/sale-feedback/${feedback.id}/review`, "POST", { action: "decline" }));
                     }, "已驳回反馈")}>仍在售</button>
                   </div>)}
-                  {selected.status !== "SOLD" && selected.status !== "BANNED" && (
+                  {!["SOLD", "BANNED", "WITHDRAWN"].includes(selected.status) && (
                     <button
                       className="button secondary"
                       disabled={busy}
                       onClick={() => {
+                        setCopiedDraft(null);
+                        setPrefill(null);
                         setEditingItem(selected);
                         setModal("publish");
                       }}
@@ -2281,7 +2239,7 @@ export default function App() {
                     selected.status,
                   ) && (
                     <>
-                      {selected.status !== "ACTIVE" && (
+                      {selected.can_relist && (
                         <button
                           className="button primary"
                           disabled={busy}
@@ -2323,7 +2281,7 @@ export default function App() {
                           标记预订
                         </button>
                       )}
-                      {selected.status !== "SOLD" && (
+                      {["ACTIVE", "RESERVED"].includes(selected.status) && (
                         <button
                           className="button primary"
                           disabled={busy}
@@ -2346,6 +2304,23 @@ export default function App() {
                       )}
                     </>
                   )}
+                  {selected.can_duplicate && <button className="button primary" disabled={busy} onClick={() => void operate(async () => {
+                    const draft = await api<ItemDraft>(`/items/${selected.id}/duplicate`, "POST");
+                    setCopiedDraft(draft);
+                    setEditingItem(null);
+                    setPrefill(null);
+                    setModal("publish");
+                  })}><Copy size={16} />再发一件</button>}
+                  {selected.can_withdraw && <button className="button secondary" disabled={busy} onClick={() => {
+                    if (!window.confirm(`撤回「${selected.title}」？撤回后不会公开展示，已有交易和聊天记录会保留，且不能直接重新上架。`)) return;
+                    void operate(async () => {
+                      const item = await api<Item>(`/items/${selected.id}`, "DELETE");
+                      setSelected(item);
+                      setCompare((current) => current.filter((entry) => entry.id !== item.id));
+                    }, "商品已撤回，聊天记录仍可查看");
+                  }}>撤回商品</button>}
+                  {selected.status === "WITHDRAWN" && <p className="hint">商品已撤回，已有交易和聊天记录已保留。</p>}
+                  {["ACTIVE", "RESERVED", "SOLD"].includes(selected.status) && selected.can_withdraw === false && <p className="hint">请先处理预订或待确认交易，再撤回商品。</p>}
                 </div>
               ) : (
                 <div className="detail-actions">
@@ -2363,12 +2338,13 @@ export default function App() {
                     />
                     {selected.is_favorite ? "已收藏" : "收藏"}
                   </button>
-                  <button className="button primary" disabled={selected.status !== "ACTIVE"}
+                  <button className="button primary" disabled={!detailFromChat && selected.status !== "ACTIVE"}
                     onClick={() => {
+                      if (detailFromChat) { setModal(null); return; }
                       if (!needUser()) return;
                       setChatItem(selected); setChatDraft(""); setModal(null); navigate("messages");
                     }}>
-                    <MessageCircle size={16} />联系卖家
+                    <MessageCircle size={16} />{detailFromChat ? "返回聊天" : "联系卖家"}
                   </button>
                 </div>
               )}

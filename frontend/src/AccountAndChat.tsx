@@ -90,6 +90,7 @@ export function EmailSignIn({ meta, intent, email, setEmail, code, setCode, sent
       </>}
       {error && <p className="form-error" role="alert">{error}</p>}
       {!meta.email_auth_ready && <p className="form-error">邮件服务尚未配置，邮箱验证暂不可用。</p>}
+      {intent === "register" && <p className="hint">注册后默认接收未读站内信邮件提醒，可在个人主页关闭。</p>}
       <button type="submit" className="button primary full" disabled={busy || !meta.email_auth_ready}>
         <Mail size={16} />{busy ? "处理中…" : sent ? intent === "register" ? "创建账号" : "验证并登录" : "发送验证码"}
       </button>
@@ -210,16 +211,20 @@ export function PasswordSetup({ meta, initialEmail = "", onSignedIn }: {
   </form>;
 }
 
-export function ChatCenter({ user, conversations, initialItem, initialDraft, onStarted, refresh }: {
+export function ChatCenter({ user, conversations, initialItem, initialDraft, initialConversationId, onConversationOpened, onStarted, onOpenItem, refresh }: {
   user: User;
   conversations: Conversation[];
   initialItem: Item | null;
   initialDraft: string;
+  initialConversationId?: string | null;
+  onConversationOpened?: () => void;
   onStarted: () => void;
+  onOpenItem: (id: string) => void;
   refresh: () => void;
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [recentConversation, setRecentConversation] = useState<Conversation | null>(null);
+  const activeSnapshot = useRef<Conversation | null>(null);
   const [newItem, setNewItem] = useState<Item | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -238,6 +243,30 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
   const [layoutHeight, setLayoutHeight] = useState<number>();
   const loadingOlder = useRef(false);
   const handledItem = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialConversationId) return;
+    let alive = true;
+    setActiveId(null);
+    setRecentConversation(null);
+    setNewItem(null);
+    setMessages([]);
+    setError("");
+    void api<Conversation>(`/conversations/${encodeURIComponent(initialConversationId)}`)
+      .then((conversation) => {
+        if (!alive) return;
+        setActiveId(conversation.id);
+        setRecentConversation(conversation);
+        setLoadedOlder(false);
+        setDraft("");
+        onConversationOpened?.();
+      })
+      .catch(() => {
+        if (!alive) return;
+        setError("无法打开该会话，请确认登录了接收提醒的账号后重试。");
+        onConversationOpened?.();
+      });
+    return () => { alive = false; };
+  }, [initialConversationId, user.id, onConversationOpened]);
   useEffect(() => {
     const measure = () => {
       const layout = layoutRef.current;
@@ -318,7 +347,10 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
       setRecentConversation(null);
     }
   }, [listedConversation, recentConversation]);
-  const active = recentConversation?.id === activeId ? recentConversation : listedConversation;
+  const active = (recentConversation?.id === activeId ? recentConversation : listedConversation)
+    ?? (activeSnapshot.current?.id === activeId ? activeSnapshot.current : null);
+  // Keep the thread mounted while its list is being refreshed after a message or deal action.
+  if (active) activeSnapshot.current = active;
   async function changeDeal(action: "request" | "reserve" | "decline" | "cancel" | "sold" | "confirm") {
     if (!activeId) return;
     setBusy(true); setError("");
@@ -425,6 +457,7 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
   return (
     <section className="chat-page">
       <div className="chat-heading"><MessageCircle size={22} /><div><h1>站内消息</h1><p>关于商品的沟通会保存在这里，只有买卖双方可见。</p></div></div>
+      {error && !active && !newItem && <p className="form-error" role="alert">{error}</p>}
       <div ref={layoutRef} style={{ height: layoutHeight }} className={`chat-layout ${activeId || newItem ? "chat-active" : ""}`}>
         <div className="chat-list" aria-label="会话列表">
           {conversations.length ? conversations.map((conversation) => (
@@ -442,12 +475,18 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
           {(active || newItem) ? <>
             <div className="chat-thread-head">
               <button type="button" className="chat-back" disabled={busy || uploading} onClick={() => { setActiveId(null); setNewItem(null); onStarted(); }} aria-label="返回会话列表"><ArrowLeft size={18} /></button>
-              <div><strong>{active?.counterpart.nickname ?? newItem?.seller.nickname}</strong>
-                <small>{active?.item_title ?? newItem?.title} · {statusText[active?.item_status ?? newItem?.status ?? ""] ?? "状态未知"}</small></div>
+              <div><strong>{active?.counterpart.nickname ?? newItem?.seller.nickname}</strong></div>
               {active && <button type="button" className="text-button" disabled={busy} onClick={() => void toggleBlock()}>
                 <ShieldOff size={15} />{active.blocked_by_me ? "解除拉黑" : "拉黑"}
               </button>}
             </div>
+            <button type="button" className="chat-item-summary" onClick={() => onOpenItem(active?.item_id ?? newItem!.id)}
+              aria-label={`查看商品：${active?.item_title ?? newItem?.title}`}>
+              <ProductArt item={newItem ?? { title: active!.item_title, images: active!.item_image ? [active!.item_image] : [], art: "" }} />
+              <span><strong>{active?.item_title ?? newItem?.title}</strong>
+                <small>{statusText[active?.item_status ?? newItem?.status ?? ""] ?? "状态未知"} · 查看商品详情</small></span>
+              <ArrowRight size={18} aria-hidden="true" />
+            </button>
             {active && <div className="chat-deal-actions">
               {active.deal_status === "REQUESTED" && <span>买家已提出预订，等待卖家确认</span>}
               {active.deal_status === "RESERVED" && <span>卖家已确认预订，等待交接</span>}
@@ -470,7 +509,6 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, onS
             {active?.blocked && <p className="hint">双方已停止联系。聊天记录仍可查看，不能发送新消息。</p>}
             <div className="chat-history" aria-live="polite">
               {hasMore && <button className="text-button" onClick={() => void loadOlder()}>加载更早的消息</button>}
-              {newItem && <div className="chat-start-item"><ProductArt item={newItem} /><span>{newItem.title}</span><ArrowRight size={16} /></div>}
               {messages.map((message) => <div key={message.id} className={`chat-bubble ${message.sender_id === user.id ? "own" : ""}`}>
                 {message.body && <p>{message.body}</p>}
                 {message.images.length > 0 && <div className="chat-images">{message.images.map((url) =>

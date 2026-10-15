@@ -24,8 +24,8 @@ def test_imported_items_remain_private_until_owner_reviews_and_publishes(client)
     assert client.patch(f'/api/v1/item-drafts/{draft_id}', json={'images': [buyer_image]}).status_code == 422
     assert client.post(f'/api/v1/item-drafts/{draft_id}/publish', json={
         'title': '罗技静音鼠标', 'description': '九成新静音鼠标，万柳面交。',
-        'category': '数码与影音', 'price': -1, 'campus': '万柳学区',
-        'condition_grade': '9成新', 'tags': [], 'images': [],
+        'category': '数码与影音', 'price': 50, 'campus': '万柳学区',
+        'condition_grade': '9成新', 'tags': [], 'images': [buyer_image],
     }).status_code == 422
     assert len(client.get('/api/v1/item-drafts/').json()) == 2
 

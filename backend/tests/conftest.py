@@ -18,7 +18,9 @@ def isolate_local_environment(monkeypatch):
                  'EMBEDDING_API_KEY', 'EMBEDDING_BASE_URL', 'EMBEDDING_MODEL', 'MODEL_THINKING',
                  'MODEL_TIMEOUT_SECONDS', 'MATCH_MAX_ATTEMPTS', 'MATCH_THRESHOLD', 'DATABASE_URL',
                  'DEMO_MODE', 'ALLOWED_ORIGINS', 'AUTH_CODE_SECRET', 'SMTP_HOST',
-                 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_FROM'):
+                 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_FROM',
+                 'CHAT_EMAIL_ENABLED', 'PUBLIC_APP_URL', 'CHAT_EMAIL_DELAY_SECONDS',
+                 'CHAT_EMAIL_COOLDOWN_SECONDS'):
         monkeypatch.delenv(name, raising=False)
 
 

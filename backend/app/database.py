@@ -4,6 +4,8 @@ from sqlalchemy import delete, text, update
 
 from .migrations import upgrade_buyer_agent, upgrade_marketplace
 from .models import Base, Intent, Item, LoginSession, Wanted
+# Register optional-feature tables for app startup and standalone migration tools.
+from . import chat_email  # noqa: F401
 
 
 def prepare_database(engine):
