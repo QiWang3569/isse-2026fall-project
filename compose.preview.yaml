@@ -1,0 +1,105 @@
+name: yandu
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: yandu
+      POSTGRES_USER: yandu
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yandu -d yandu"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [private]
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_ENV: production
+      DEMO_MODE: "false"
+      SESSION_COOKIE_SECURE: "true"
+      DATABASE_URL: postgresql+psycopg://yandu:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/yandu
+      ALLOWED_ORIGINS: https://${SITE_DOMAIN:?Set SITE_DOMAIN in .env}
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - app_data:/app/data
+    expose: ["8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/api/v1/health', headers={'Host': os.environ['SITE_DOMAIN']}); urllib.request.urlopen(request, timeout=3).read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    networks: [private]
+
+  backup:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: yandu
+      PGDATABASE: yandu
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    entrypoint: ["sh", "/usr/local/bin/backup_postgres.sh"]
+    volumes:
+      - ./scripts/backup_postgres.sh:/usr/local/bin/backup_postgres.sh:ro
+      - ./data/backups/postgres:/backups
+    networks: [private]
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: yandu-prometheus
+    restart: unless-stopped
+    depends_on:
+      - app
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks: [private]
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: yandu-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks: [private]
+
+networks:
+  private:
+
+volumes:
+  postgres_data:
+  app_data:
+  prometheus_data:
+  grafana_data:

@@ -12,3 +12,4 @@ data/
 *.pid
 test-results/
 *.tsbuildinfo
+.DS_Store
