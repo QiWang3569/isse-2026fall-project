@@ -29,6 +29,10 @@ def upgrade_buyer_agent(engine):
                 if name not in existing:
                     conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}'))
         conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email ON users (email)'))
+        # Change future inserts only. Existing preferences, including opt-outs,
+        # must survive every subsequent application startup.
+        if engine.dialect.name == 'postgresql':
+            conn.execute(text('ALTER TABLE users ALTER COLUMN email_notifications SET DEFAULT TRUE'))
 
 
 def upgrade_marketplace(engine):

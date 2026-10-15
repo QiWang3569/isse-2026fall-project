@@ -1235,32 +1235,6 @@ main {
   color: #909d83;
   padding: 3px;
 }
-.wanted-search {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  margin-bottom: 20px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: white;
-  color: var(--muted);
-}
-.wanted-search > svg,
-.wanted-search button {
-  flex-shrink: 0;
-}
-.wanted-search input {
-  flex: 1;
-  min-width: 0;
-  width: 100%;
-  border: 0;
-  background: transparent;
-  color: #233c32;
-}
-.wanted-search .button {
-  padding: 10px 16px;
-}
 .wanted-search-summary {
   margin: -6px 0 20px;
   color: var(--muted);
@@ -2967,7 +2941,6 @@ footer .brand svg {
 :root[data-theme="dark"] .sidebar { background: #17241b; border-color: var(--line); }
 :root[data-theme="dark"] .topbar { background: #1b2b20ef; }
 :root[data-theme="dark"] .mobile-search,
-:root[data-theme="dark"] .wanted-search,
 :root[data-theme="dark"] .avatar-menu,
 :root[data-theme="dark"] .modal,
 :root[data-theme="dark"] .chat-layout,
@@ -3244,7 +3217,6 @@ footer .brand svg {
 :root[data-theme="dark"] .intent-banner input::placeholder { color: var(--night-subtle); }
 :root[data-theme="dark"] .global-search input,
 :root[data-theme="dark"] .mobile-search input,
-:root[data-theme="dark"] .wanted-search input,
 :root[data-theme="dark"] .intent-banner input,
 :root[data-theme="dark"] .filter-row select,
 :root[data-theme="dark"] .campus-picker select,
@@ -3297,8 +3269,7 @@ footer .brand svg {
 :root[data-theme="dark"] .intent-banner form,
 :root[data-theme="dark"] .auth-tabs button.active,
 :root[data-theme="dark"] .publish-tabs button.active,
-:root[data-theme="dark"] .mobile-search,
-:root[data-theme="dark"] .wanted-search { background: var(--night-surface); border-color: var(--night-border); }
+:root[data-theme="dark"] .mobile-search { background: var(--night-surface); border-color: var(--night-border); }
 :root[data-theme="dark"] .section-heading h2,
 :root[data-theme="dark"] .page-intro h1,
 :root[data-theme="dark"] .intent-banner h2,
@@ -3411,3 +3382,20 @@ footer .brand svg {
 :root[data-theme="dark"] .form-error { color: #f8c9b8; background: #4f3531; }
 :root[data-theme="dark"] .chat-unread,
 :root[data-theme="dark"] .notification-button > span { color: #f4f1eb; background: #385b41; }
+
+/* Both listing pages share one visible search entry at each breakpoint. */
+.global-search input,
+.mobile-search input {
+  min-width: 0;
+}
+.global-search > svg,
+.global-search button,
+.mobile-search > svg,
+.mobile-search button {
+  flex-shrink: 0;
+}
+.search-submit {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}

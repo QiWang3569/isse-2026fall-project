@@ -90,6 +90,7 @@ export function EmailSignIn({ meta, intent, email, setEmail, code, setCode, sent
       </>}
       {error && <p className="form-error" role="alert">{error}</p>}
       {!meta.email_auth_ready && <p className="form-error">邮件服务尚未配置，邮箱验证暂不可用。</p>}
+      {intent === "register" && <p className="hint">注册后默认接收未读站内信邮件提醒，可在个人主页关闭。</p>}
       <button type="submit" className="button primary full" disabled={busy || !meta.email_auth_ready}>
         <Mail size={16} />{busy ? "处理中…" : sent ? intent === "register" ? "创建账号" : "验证并登录" : "发送验证码"}
       </button>

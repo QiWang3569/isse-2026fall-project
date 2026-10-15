@@ -53,6 +53,7 @@ def test_verified_pku_mail_creates_user_and_reuses_account(tmp_path, monkeypatch
         user = result.json()['user']
         assert user['role'] == 'student' and user['email'] == sent[0][0]
         assert client.get('/api/v1/auth/me').json()['user']['id'] == user['id']
+        assert user['email_notifications'] is True
         assert client.post('/api/v1/auth/email/verify', json={'email': sent[0][0], 'code': sent[0][1]}).status_code == 400
         assert client.post('/api/v1/auth/logout').status_code == 200
         with app.state.session_factory() as db:

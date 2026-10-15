@@ -87,6 +87,10 @@ def legacy_upgrade(engine, factory):
             assert db.get(Intent, 'legacy-intent').keywords == ['鼠标']
             assert db.get(ItemDraft, 'legacy-draft').raw == '旧草稿静音鼠标'
             assert db.get(User, 'demo-buyer').email_notifications is False
+        with engine.begin() as connection:
+            assert connection.scalar(text("SELECT column_default FROM information_schema.columns WHERE table_name='users' AND column_name='email_notifications'")) == 'true'
+            # A persisted opt-out must not be overwritten by default migration.
+            assert connection.scalar(text("SELECT email_notifications FROM users WHERE id='demo-buyer'")) is False
         tables = set(inspect(engine).get_table_names())
         assert {'chat_email_queue', 'chat_email_receipts'} <= tables and 'wanted_watches' not in tables
         for table in ('items', 'buyer_intents', 'wanted_posts'):

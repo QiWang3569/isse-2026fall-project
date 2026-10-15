@@ -1,4 +1,4 @@
-"""Durable, opt-in reminders for unread chat messages.
+"""Durable, user-controlled reminders for unread chat messages.
 
 Polling only sees committed messages, so mail never runs in a chat transaction.
 Atomic leases prevent simultaneous workers claiming a conversation/recipient;

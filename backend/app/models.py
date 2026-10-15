@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, false
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, true
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -26,7 +26,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default='student')
     contact: Mapped[str] = mapped_column(String(100), default='')
     email: Mapped[str | None] = mapped_column(String(254), unique=True, nullable=True)
-    email_notifications: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    email_notifications: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     bio: Mapped[str] = mapped_column(String(160), default='')
     avatar_color: Mapped[str] = mapped_column(String(20), default='sage')

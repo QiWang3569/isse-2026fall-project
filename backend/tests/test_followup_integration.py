@@ -36,12 +36,32 @@ def test_email_preference_is_private_partial_and_requires_registered_account(cli
     assert 'email_notifications' not in public and 'email' not in public
 
 
-def test_new_database_email_preference_server_default_is_false(client, app):
+def test_new_database_email_preference_server_default_is_true(client, app):
     with app.state.engine.begin() as connection:
         connection.execute(text("INSERT INTO users (id, nickname, campus, role, contact, bio, avatar_color) "
                                 "VALUES ('server-default-user', '默认用户', '万柳学区', 'student', '', '', 'sage')"))
     with app.state.session_factory() as db:
-        assert db.get(User, 'server-default-user').email_notifications is False
+        assert db.get(User, 'server-default-user').email_notifications is True
+
+
+def test_default_enabled_but_user_opt_out_survives_restart(tmp_path):
+    settings = Settings(database_url=f'sqlite:///{tmp_path / "preference.db"}', data_dir=tmp_path,
+                        demo_mode=False, ai_mode='local')
+    app = create_app(settings)
+    with TestClient(app) as client:
+        with app.state.session_factory.begin() as db:
+            db.add(User(id='default-on', nickname='默认开启用户', campus='万柳学区', email='new@pku.edu.cn'))
+            db.flush()
+            assert db.get(User, 'default-on').email_notifications is True
+            db.add(LoginSession(token_hash=hashlib.sha256(b'preference-session').hexdigest(),
+                                user_id='default-on', expires_at=now() + timedelta(hours=1)))
+        client.cookies.set('yandu_session', 'preference-session')
+        assert client.patch('/api/v1/users/me', json={'email_notifications': False}).status_code == 200
+    for _ in range(2):
+        restarted = create_app(settings)
+        with TestClient(restarted):
+            with restarted.state.session_factory() as db:
+                assert db.get(User, 'default-on').email_notifications is False
 
 
 def test_email_link_can_load_older_authorized_conversation_outside_recent_list(client, app):

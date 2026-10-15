@@ -29,7 +29,6 @@ import {
   Pause,
   Play,
   Plus,
-  Search,
   ShieldCheck,
   Shirt,
   Sparkles,
@@ -80,6 +79,7 @@ import {
 import { IntentForm, PublishForm, PublishWorkspace, WantedForm } from "./forms";
 import { AuthMethods, ChatCenter, PasswordSetup } from "./AccountAndChat";
 import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
+import { SearchBar } from "./SearchBar";
 
 const nav = [
   { key: "market", label: "逛逛校园", icon: Compass },
@@ -527,6 +527,22 @@ export default function App() {
     setPage(1);
     setSmartPage(1);
   }
+  const searchBarProps = {
+    target: view === "wanted" ? "wanted" as const : "market" as const,
+    value: search,
+    showClear: Boolean(search || query || (view !== "wanted" && smartQuery)),
+    smartMode,
+    onChange: setSearch,
+    onSubmit: searchSubmit,
+    onClear: clearSearch,
+    onToggleSmart: () => {
+      setSmartMode(!smartMode);
+      if (smartMode) {
+        setSmartQuery("");
+        setSmartResult(null);
+      }
+    },
+  };
   const listParams = new URLSearchParams({
     q: query,
     category,
@@ -772,38 +788,7 @@ export default function App() {
           <div className="mobile-brand">
             <Brand small />
           </div>
-          <form className="global-search" onSubmit={searchSubmit}>
-            <Search size={19} />
-            <input
-              aria-label={view === "wanted" ? "搜索求购" : "搜索校园好物"}
-              maxLength={120}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={
-                view === "wanted" ? "搜索求购标题或描述…" : smartMode
-                  ? "说人话就能搜：如“2000左右能记笔记的平板”"
-                  : "搜搜你需要的校园好物…"
-              }
-            />
-            {(search || query || smartQuery) && <button type="button" className="text-button" aria-label="清空搜索" onClick={clearSearch}><X size={16} /></button>}
-            <kbd>Enter</kbd>
-            {view !== "wanted" && <button
-              className={`smart-toggle ${smartMode ? "active" : ""}`}
-              type="button"
-              aria-pressed={smartMode}
-              title={smartMode ? "关闭智能搜索" : "开启智能搜索"}
-              onClick={() => {
-                setSmartMode(!smartMode);
-                if (smartMode) {
-                  setSmartQuery("");
-                  setSmartResult(null);
-                }
-              }}
-            >
-              <Sparkles size={16} />
-              <span>智能</span>
-            </button>}
-          </form>
+          <SearchBar {...searchBarProps} />
           <div className="top-actions">
             <button className="icon-button theme-toggle" type="button"
               aria-label={theme === "dark" ? "切换到日间模式" : "切换到夜间模式"}
@@ -897,42 +882,7 @@ export default function App() {
             onAutoEditConsumed={() => setEditProfile(false)}
           /> : <Empty title="登录后查看个人主页" text="使用北大邮箱登录，集中管理你的代蹲、消息、收藏与发布。"
             action="登录或注册" onAction={() => setModal("login")} />)}
-          {view === "market" && (
-            <form className="mobile-search" onSubmit={searchSubmit}>
-              <Search size={18} />
-              <input
-                aria-label="手机端搜索校园好物"
-                maxLength={120}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={
-                  smartMode
-                    ? "说人话就能搜，例如：没划痕的线代"
-                    : "搜索物品、教材或型号…"
-                }
-              />
-              {(search || query || smartQuery) && <button type="button" className="text-button" aria-label="清空搜索" onClick={clearSearch}><X size={16} /></button>}
-              <button
-                className={`smart-toggle ${smartMode ? "active" : ""}`}
-                type="button"
-                aria-pressed={smartMode}
-                title={smartMode ? "关闭智能搜索" : "开启智能搜索"}
-                onClick={() => {
-                  setSmartMode(!smartMode);
-                  if (smartMode) {
-                    setSmartQuery("");
-                    setSmartResult(null);
-                  }
-                }}
-              >
-                <Sparkles size={15} />
-                智能
-              </button>
-              <button type="submit" className="text-button">
-                搜索
-              </button>
-            </form>
-          )}
+          {(view === "market" || view === "wanted") && <SearchBar {...searchBarProps} mobile />}
           {view === "market" && (
             <>
               <section className="hero">
@@ -1312,14 +1262,6 @@ export default function App() {
                       <option value="500">500 元以内</option>
                     </select>
                   </label>
-                  {query && (
-                    <button
-                      className="query-tag"
-                      onClick={clearSearch}
-                    >
-                      “{query}”<X size={13} />
-                    </button>
-                  )}
                   <label>
                     <span className="sr-only">售卖状态</span>
                     <select
@@ -1333,6 +1275,14 @@ export default function App() {
                       <option value="all">所有好物</option>
                     </select>
                   </label>
+                  {query && (
+                    <button
+                      className="query-tag"
+                      onClick={clearSearch}
+                    >
+                      “{query}”<X size={13} />
+                    </button>
+                  )}
                 </div>
                 <label className="sort-picker">
                   <ArrowDownUp size={14} />
@@ -1623,32 +1573,6 @@ export default function App() {
                   发布求购
                 </button>
               </Intro>
-              <form
-                className="wanted-search"
-                role="search"
-                aria-label="搜索求购"
-                onSubmit={searchSubmit}
-              >
-                <Search size={18} aria-hidden="true" />
-                <input
-                  type="search"
-                  aria-label="求购关键词"
-                  placeholder="搜索求购标题或描述…"
-                  maxLength={120}
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-                {(search || query) && (
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={clearSearch}
-                  >
-                    清空
-                  </button>
-                )}
-                <button type="submit" className="button primary">搜索</button>
-              </form>
               <p className="search-rule">多个关键词用空格分隔，结果需同时包含所有关键词。</p>
               {query && !wanted.loading && !wanted.error && (
                 <p className="wanted-search-summary" role="status">
