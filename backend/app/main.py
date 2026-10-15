@@ -20,6 +20,7 @@ from PIL import Image, UnidentifiedImageError
 from sqlalchemy import case, create_engine, delete, event, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from .config import ROOT, Settings
 from .chat_email import ChatEmailRunner
@@ -105,8 +106,14 @@ def create_app(settings: Settings | None = None):
     app.state.mutation_lock = mutation_lock
     if settings.app_env == 'production':
         from urllib.parse import urlparse
-        app.add_middleware(TrustedHostMiddleware, allowed_hosts=[urlparse(settings.origins[0]).hostname])
+        allowed_hosts = [h for h in [urlparse(settings.origins[0]).hostname, 'app', 'localhost', '127.0.0.1'] if h]
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
     app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=True, allow_methods=['GET', 'POST', 'PATCH', 'DELETE'], allow_headers=['Content-Type'])
+
+    Instrumentator(
+        should_group_status_codes=False,
+        should_ignore_untemplated=True,
+    ).instrument(app).expose(app, endpoint='/metrics')
 
     @app.middleware('http')
     async def mutation_origin_guard(request: Request, call_next):
@@ -1530,7 +1537,7 @@ def create_app(settings: Settings | None = None):
 
         @app.get('/{path:path}', include_in_schema=False)
         def spa(path: str):
-            if path.startswith(('api/', 'uploads/')):
+            if path.startswith(('api/', 'uploads/', 'metrics')):
                 raise HTTPException(404, '接口不存在')
             return FileResponse(frontend / 'index.html', headers={'Cache-Control': 'no-store'})
     return app

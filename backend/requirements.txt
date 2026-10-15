@@ -9,3 +9,4 @@ python-dotenv>=1.0,<2
 Pillow>=11,<13
 pytest>=8,<10
 certifi>=2026.7,<2027
+prometheus-fastapi-instrumentator>=7.0.0
