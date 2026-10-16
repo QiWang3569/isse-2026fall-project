@@ -10,3 +10,5 @@ def test_prometheus_metrics_endpoint(client):
     body = metrics_res.text
     assert 'http_requests_total' in body
     assert 'http_request_duration_seconds' in body
+    assert 'yandu_active_users' in body
+    assert 'yandu_active_sessions' in body

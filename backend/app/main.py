@@ -17,10 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
-from sqlalchemy import case, create_engine, delete, event, func, or_, select, update
+from sqlalchemy import case, create_engine, delete, distinct, event, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import REGISTRY
+from prometheus_client.core import GaugeMetricFamily
 
 from .config import ROOT, Settings
 from .chat_email import ChatEmailRunner
@@ -48,6 +50,28 @@ def term_matches(term: str, text: str) -> bool:
     if not needle:
         return False
     return needle in normalize(text)
+
+
+class ActiveUsersCollector:
+    _is_yandu_collector = True
+
+    def __init__(self, session_factory):
+        self.session_factory = session_factory
+
+    def collect(self):
+        gauge_users = GaugeMetricFamily('yandu_active_users', 'Current number of active logged-in users', labels=[])
+        gauge_sessions = GaugeMetricFamily('yandu_active_sessions', 'Current number of active login sessions', labels=[])
+        try:
+            with self.session_factory() as db:
+                users_count = db.query(func.count(distinct(LoginSession.user_id))).filter(LoginSession.expires_at > now()).scalar() or 0
+                sessions_count = db.query(func.count(LoginSession.token_hash)).filter(LoginSession.expires_at > now()).scalar() or 0
+        except Exception:
+            users_count = 0
+            sessions_count = 0
+        gauge_users.add_metric([], float(users_count))
+        gauge_sessions.add_metric([], float(sessions_count))
+        yield gauge_users
+        yield gauge_sessions
 
 
 def create_app(settings: Settings | None = None):
@@ -114,6 +138,11 @@ def create_app(settings: Settings | None = None):
         should_group_status_codes=False,
         should_ignore_untemplated=True,
     ).instrument(app).expose(app, endpoint='/metrics')
+
+    for collector in list(getattr(REGISTRY, '_collector_to_names', {}).keys()):
+        if getattr(collector, '_is_yandu_collector', False):
+            REGISTRY.unregister(collector)
+    REGISTRY.register(ActiveUsersCollector(factory))
 
     @app.middleware('http')
     async def mutation_origin_guard(request: Request, call_next):
