@@ -1066,18 +1066,19 @@ main {
 }
 .card-tags {
   display: flex;
+  flex-wrap: wrap;
   gap: 5px;
   margin-top: 8px;
-  overflow: hidden;
-  height: 19px;
+  min-height: 19px;
 }
 .card-tags span {
+  max-width: 100%;
   font-size: 8px;
   background: #f3f5ed;
   color: #9aa48d;
   padding: 3px 5px;
   border-radius: 3px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .price-row {
   display: flex;

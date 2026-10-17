@@ -313,7 +313,7 @@ export function Card({
           {item.title}
         </button>
         <div className="card-tags">
-          {item.tags.slice(0, 2).map((t) => (
+          {item.tags.map((t) => (
             <span key={t}>{t}</span>
           ))}
           {item.is_demo && <span>演示商品</span>}
