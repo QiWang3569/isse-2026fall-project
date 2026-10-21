@@ -26,6 +26,7 @@ from prometheus_client.core import GaugeMetricFamily
 
 from .config import ROOT, Settings
 from .feedback import register_feedback
+from .schemas import AnnouncementReadRequest
 from .chat_email import ChatEmailRunner
 from .database import prepare_database, retire_demo_data
 from .email_auth import code_digest, new_code, normalize_pku_email, send_verification_email
@@ -284,9 +285,12 @@ def create_app(settings: Settings | None = None):
         return {'count': count or 0}
 
     @app.post('/api/v1/announcements/mark-read')
-    def announcements_mark_read(db: Session = Depends(get_db), user: User = Depends(require_user)):
+    def announcements_mark_read(data: AnnouncementReadRequest, db: Session = Depends(get_db), user: User = Depends(require_user)):
         with mutation_lock:
-            active_ids = db.scalars(select(Announcement.id).where(Announcement.active == True)).all()
+            # Only acknowledge entries actually displayed by the client.
+            db.scalar(select(User).where(User.id == user.id).with_for_update())
+            active_ids = db.scalars(select(Announcement.id).where(
+                Announcement.active == True, Announcement.id.in_(data.ids))).all()
             existing = set(db.scalars(select(AnnouncementRead.announcement_id)
                                       .where(AnnouncementRead.user_id == user.id)).all())
             for announcement_id in active_ids:

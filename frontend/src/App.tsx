@@ -23,7 +23,6 @@ import {
   LogOut,
   Mail,
   MapPin,
-  Megaphone,
   Monitor,
   Moon,
   Pause,
@@ -81,6 +80,7 @@ import { AuthMethods, ChatCenter, PasswordSetup } from "./AccountAndChat";
 import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
 import { SearchBar } from "./SearchBar";
 import { FeedbackCenter, FeedbackWorkspace, type FeedbackNotices } from "./Feedback";
+import { AnnouncementEntry } from "./AnnouncementEntry";
 
 const nav = [
   { key: "market", label: "逛逛校园", icon: Compass },
@@ -184,6 +184,8 @@ function useResource<T>(
 }
 
 export default function App() {
+  const [announcementRevision, setAnnouncementRevision] = useState(0);
+  const seenAnnouncements = useRef(new Set<string>());
   const [feedbackId, setFeedbackId] = useState<string | null>(null);
   const feedbackAfterLogin = useRef(false);
   const [theme, setTheme] = useState<"light" | "dark">(initialTheme);
@@ -415,12 +417,15 @@ export default function App() {
     }
     return true;
   };
-  function markAnnouncementsRead() {
+  const markAnnouncementRead = useCallback((id: string) => {
     if (!user) return;
-    void api("/announcements/mark-read", "POST")
-      .then(() => refresh())
-      .catch(() => { /* Keep the unread badge until the next poll. */ });
-  }
+    const key = `${user.id}:${id}`;
+    if (seenAnnouncements.current.has(key)) return;
+    seenAnnouncements.current.add(key);
+    void api("/announcements/mark-read", "POST", { ids: [id] })
+      .then(() => setAnnouncementRevision((v) => v + 1))
+      .catch(() => { seenAnnouncements.current.delete(key); });
+  }, [user]);
   function signedIn(account: User) {
     setUser(account);
     setCompare([]);
@@ -605,7 +610,7 @@ export default function App() {
     "/announcements", revision, true,
   );
   const announcementUnread = useResource<{ count: number }>(
-    "/announcements/unread", revision, !!user, true,
+    "/announcements/unread", revision + announcementRevision, !!user, true,
   );
   const siteFeedbackNotices = useResource<FeedbackNotices>(
     "/feedback-notices", revision, !!user, true,
@@ -765,16 +770,6 @@ export default function App() {
               {key === "profile" && chatUnread > 0 && <span className="nav-new">{chatUnread}</span>}
             </button>
           ))}
-          <button
-            className={`nav-item ${modal === "announcements" ? "active" : ""}`}
-            onClick={() => {
-              setModal("announcements");
-              markAnnouncementsRead();
-            }}
-          >
-            <Megaphone size={20} strokeWidth={1.7} />
-            <span>系统公告</span>
-          </button>
           {user?.role === "admin" && (
             <button
               className={`nav-item ${adminView ? "active" : ""}`}
@@ -839,11 +834,8 @@ export default function App() {
               className="notification-button icon-button"
               aria-label={`通知${allUnread ? `，${allUnread} 条未读` : ""}`}
               onClick={() => {
-                if (needUser()) {
-                  setNoticeIntent(null);
-                  setModal("notifications");
-                  markAnnouncementsRead();
-                }
+                setNoticeIntent(null);
+                setModal("notifications");
               }}
             >
               <Bell size={21} />
@@ -2032,19 +2024,12 @@ export default function App() {
                 <section className="notice-group">
                   <h3 className="notice-group-title">公告与更新</h3>
                   {(announcements.data ?? []).slice(0, 3).map((a) => (
-                    <article className="notice" key={a.id}>
-                      <div>
-                        <span className="task-status">{a.kind}</span>
-                        <h3>{a.title}</h3>
-                        <p>{a.body}</p>
-                      </div>
-                    </article>
+                    <AnnouncementEntry key={a.id} announcement={a} compact onSeen={markAnnouncementRead} />
                   ))}
                   <button
                     className="text-button"
                     onClick={() => {
                       setModal("announcements");
-                      markAnnouncementsRead();
                     }}
                   >
                     查看全部公告
@@ -2180,16 +2165,7 @@ export default function App() {
           {(announcements.data ?? []).length ? (
             <div className="announcement-list">
               {(announcements.data ?? []).map((a) => (
-                <article className="announcement" key={a.id}>
-                  <span
-                    className={`announcement-kind ${a.kind === "更新" ? "update" : ""}`}
-                  >
-                    {a.kind}
-                  </span>
-                  <h3>{a.title}</h3>
-                  <p>{a.body}</p>
-                  <time>{new Date(a.created_at).toLocaleString("zh-CN")}</time>
-                </article>
+                <AnnouncementEntry key={a.id} announcement={a} onSeen={markAnnouncementRead} />
               ))}
             </div>
           ) : (
