@@ -80,6 +80,7 @@ import { IntentForm, PublishForm, PublishWorkspace, WantedForm } from "./forms";
 import { AuthMethods, ChatCenter, PasswordSetup } from "./AccountAndChat";
 import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
 import { SearchBar } from "./SearchBar";
+import { FeedbackCenter, FeedbackWorkspace, type FeedbackNotices } from "./Feedback";
 
 const nav = [
   { key: "market", label: "逛逛校园", icon: Compass },
@@ -87,7 +88,7 @@ const nav = [
   { key: "intents", label: "我的代蹲", icon: Sparkles },
   { key: "profile", label: "我的主页", icon: UserRound },
 ];
-type View = "market" | "profile" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "mywanted" | "admin" | "admin-chat" | "admin-reports" | "admin-logs";
+type View = "market" | "profile" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "mywanted" | "admin" | "admin-chat" | "admin-reports" | "admin-logs" | "admin-feedback";
 type ModalName =
   | "login"
   | "intent"
@@ -97,6 +98,7 @@ type ModalName =
   | "compare"
   | "detail"
   | "announcements"
+  | "feedback"
   | null;
 const validViews = [
   "market",
@@ -111,6 +113,7 @@ const validViews = [
   "admin-chat",
   "admin-reports",
   "admin-logs",
+  "admin-feedback",
 ];
 function currentView(): View {
   const v = location.hash.slice(1).split("/")[0];
@@ -181,6 +184,8 @@ function useResource<T>(
 }
 
 export default function App() {
+  const [feedbackId, setFeedbackId] = useState<string | null>(null);
+  const feedbackAfterLogin = useRef(false);
   const [theme, setTheme] = useState<"light" | "dark">(initialTheme);
   const [meta, setMeta] = useState<Meta | null>(null),
     [user, setUser] = useState<User | null>(null);
@@ -419,6 +424,12 @@ export default function App() {
   function signedIn(account: User) {
     setUser(account);
     setCompare([]);
+    if (feedbackAfterLogin.current) {
+      feedbackAfterLogin.current = false;
+      setModal("feedback");
+      refresh();
+      return;
+    }
     const conversationId = currentConversation();
     setPendingConversation(conversationId);
     if (conversationId) {
@@ -596,6 +607,10 @@ export default function App() {
   const announcementUnread = useResource<{ count: number }>(
     "/announcements/unread", revision, !!user, true,
   );
+  const siteFeedbackNotices = useResource<FeedbackNotices>(
+    "/feedback-notices", revision, !!user, true,
+  );
+  const openFeedback = (id: string | null = null) => { setFeedbackId(id); setModal("feedback"); };
   const visibleNotices = noticeIntent
     ? (taskNotices.data ?? []).filter((n) => n.intent_id === noticeIntent.id)
     : notices;
@@ -603,9 +618,9 @@ export default function App() {
   const chatUnread = (conversations.data ?? []).reduce((sum, c) => sum + c.unread_count, 0);
   const feedbackUnread = (saleFeedbackMine.data ?? []).length;
   const announcementUnreadCount = announcementUnread.data?.count ?? 0;
-  const allUnread = unread + chatUnread + feedbackUnread + announcementUnreadCount;
+  const allUnread = unread + chatUnread + feedbackUnread + announcementUnreadCount + (siteFeedbackNotices.data?.count ?? 0);
   const personalView = ["profile", "intents", "messages", "favorites", "mine", "mywanted"].includes(view);
-  const adminView = ["admin", "admin-chat", "admin-reports", "admin-logs"].includes(view);
+  const adminView = ["admin", "admin-chat", "admin-reports", "admin-logs", "admin-feedback"].includes(view);
 
   if (!meta)
     return (
@@ -771,6 +786,7 @@ export default function App() {
           )}
         </nav>
         <div className="sidebar-bottom">
+          <div className="contact-actions">
           <button
             className="sidebar-contact"
             onClick={() => void copy("pkuyandu@163.com", "邮箱已复制")}
@@ -778,9 +794,13 @@ export default function App() {
             <Mail size={15} />
             <span>
               <strong>联系我们</strong>
-              <small>pkuyandu@163.com</small>
             </span>
           </button>
+          <button type="button" className="sidebar-contact" onClick={() => openFeedback()}>
+            <MessageCircle size={15} /><span><strong>意见反馈</strong></span>
+          </button>
+          </div>
+          <small className="contact-email">pkuyandu@163.com</small>
         </div>
       </aside>
       <div className="main-shell">
@@ -1761,12 +1781,15 @@ export default function App() {
           <footer>
             <Brand small />
             <span>校园生活的另一种循环</span>
+            <div className="footer-contact-actions">
             <button
               className="footer-contact"
               onClick={() => void copy("pkuyandu@163.com", "邮箱已复制")}
             >
               联系我们
             </button>
+            <button type="button" className="footer-contact" onClick={() => openFeedback()}>意见反馈</button>
+            </div>
           </footer>
         </main>
       </div>
@@ -1822,7 +1845,7 @@ export default function App() {
       {modal === "login" && (
         <Modal
           title={user ? "当前账号" : "欢迎来到燕渡"}
-          onClose={() => setModal(null)}
+          onClose={() => { feedbackAfterLogin.current = false; setModal(null); }}
         >
           <div className="stack-form">
             {user?.email && <p className="auth-description">已验证邮箱：{user.email}<br />
@@ -1960,6 +1983,13 @@ export default function App() {
           />
         </Modal>
       )}
+      {modal === "feedback" && (
+        <Modal title="意见反馈" onClose={() => setModal(null)}>
+          <FeedbackCenter key={`${user?.id ?? "guest"}-${feedbackId ?? "new"}`} user={user}
+            initialId={feedbackId} onChange={refresh}
+            onLogin={() => { feedbackAfterLogin.current = true; setModal("login"); }} />
+        </Modal>
+      )}
       {modal === "notifications" && (
         <Modal
           title={noticeIntent ? "这个愿望发现的好物" : "燕渡为你捎来的消息"}
@@ -1987,6 +2017,17 @@ export default function App() {
             </>
           ) : (
             <div className="notice-center">
+              {!!siteFeedbackNotices.data?.count && (
+                <section className="notice-group">
+                  <h3 className="notice-group-title">意见反馈回复</h3>
+                  {siteFeedbackNotices.data.items.map((n) => (
+                    <article className="notice unread" key={n.id}>
+                      <strong>{n.body}</strong>
+                      <button type="button" className="text-button" onClick={() => openFeedback(n.feedback_id)}>查看反馈与回复 →</button>
+                    </article>
+                  ))}
+                </section>
+              )}
               {(announcements.data ?? []).length > 0 && (
                 <section className="notice-group">
                   <h3 className="notice-group-title">公告与更新</h3>
@@ -2416,12 +2457,13 @@ export default function App() {
   );
 }
 
-type AdminView = "admin" | "admin-chat" | "admin-reports" | "admin-logs";
+type AdminView = "admin" | "admin-chat" | "admin-reports" | "admin-logs" | "admin-feedback";
 
 const adminTabs = [
   { key: "admin", label: "公告管理" },
   { key: "admin-chat", label: "聊天举报" },
   { key: "admin-reports", label: "商品举报" },
+  { key: "admin-feedback", label: "用户反馈" },
   { key: "admin-logs", label: "操作记录" },
 ] as const;
 
@@ -2553,6 +2595,7 @@ function Admin({
       setBusy(false);
     }
   }
+  if (view === "admin-feedback") return <FeedbackWorkspace key={user.id} admin onChange={refresh} />;
   return (
     <>
       <Intro

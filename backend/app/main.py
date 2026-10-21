@@ -25,6 +25,7 @@ from prometheus_client import REGISTRY
 from prometheus_client.core import GaugeMetricFamily
 
 from .config import ROOT, Settings
+from .feedback import register_feedback
 from .chat_email import ChatEmailRunner
 from .database import prepare_database, retire_demo_data
 from .email_auth import code_digest, new_code, normalize_pku_email, send_verification_email
@@ -813,7 +814,12 @@ def create_app(settings: Settings | None = None):
     def item_detail(item_id: str, db: Session = Depends(get_db), user=Depends(current_user)):
         return item_out(get_item(db, item_id, user), db, user)
 
-    def save_image(file, user, db, private=False):
+    def save_image(file, user, db, purpose='item', commit=True):
+        directory, prefix = {
+            'item': (upload_dir, '/uploads/'),
+            'chat': (chat_upload_dir, '/api/v1/chat-images/'),
+            'feedback': (settings.data_dir / 'feedback-uploads', '/api/v1/feedback-images/'),
+        }[purpose]
         raw = file.file.read(6*1024*1024+1)
         if len(raw) > 6*1024*1024:
             raise HTTPException(413, '每张图片不得超过 6 MB')
@@ -829,12 +835,15 @@ def create_app(settings: Settings | None = None):
                     im = im.convert('RGB')
                     im.thumbnail((1600, 1600))
                     name = uid() + '.jpg'
-                    im.save((chat_upload_dir if private else upload_dir) / name, 'JPEG', quality=88)
+                    im.save(directory / name, 'JPEG', quality=88)
         except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError, Image.DecompressionBombWarning):
             raise HTTPException(422, '请上传有效的 JPG、PNG 或 WebP 图片（不超过 2000 万像素）')
-        path = ('/api/v1/chat-images/' if private else '/uploads/') + name
+        path = prefix + name
         db.add(Upload(path=path, user_id=user.id))
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return {'url': path}
 
     @app.post('/api/v1/uploads', status_code=201)
@@ -843,7 +852,7 @@ def create_app(settings: Settings | None = None):
 
     @app.post('/api/v1/chat-uploads', status_code=201)
     def chat_upload(file: UploadFile = File(...), user=Depends(require_user), db: Session = Depends(get_db)):
-        return save_image(file, user, db, private=True)
+        return save_image(file, user, db, purpose='chat')
 
     @app.get('/api/v1/chat-images/{name}')
     def chat_image(name: str, user=Depends(require_user), db: Session = Depends(get_db)):
@@ -1558,6 +1567,8 @@ def create_app(settings: Settings | None = None):
             log(db, user, 'announcement.update', announcement.id)
             db.commit()
         return {'ok': True}
+
+    register_feedback(app, get_db, require_user, require_admin, settings, mutation_lock, save_image)
 
     app.mount('/uploads', StaticFiles(directory=upload_dir), name='uploads')
     frontend = ROOT / 'frontend/dist'

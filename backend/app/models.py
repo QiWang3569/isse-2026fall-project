@@ -274,3 +274,47 @@ class Upload(Base):
     __tablename__ = 'uploads'
     path: Mapped[str] = mapped_column(String(200), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+
+
+class Feedback(Base):
+    __tablename__ = 'feedbacks'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    category: Mapped[str] = mapped_column(String(20))
+    body: Mapped[str] = mapped_column(Text)
+    page_path: Mapped[str] = mapped_column(String(500), default='')
+    status: Mapped[str] = mapped_column(String(20), default='OPEN')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    __table_args__ = (Index('idx_feedback_user', 'user_id', 'updated_at'),
+                      Index('idx_feedback_status', 'status', 'updated_at'))
+
+
+class FeedbackReply(Base):
+    __tablename__ = 'feedback_replies'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    feedback_id: Mapped[str] = mapped_column(ForeignKey('feedbacks.id'), index=True)
+    author_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    is_staff: Mapped[bool] = mapped_column(Boolean, default=False)
+    body: Mapped[str] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class FeedbackAttachment(Base):
+    __tablename__ = 'feedback_attachments'
+    path: Mapped[str] = mapped_column(ForeignKey('uploads.path'), primary_key=True)
+    feedback_id: Mapped[str | None] = mapped_column(ForeignKey('feedbacks.id'), nullable=True, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id'), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class FeedbackNotice(Base):
+    __tablename__ = 'feedback_notices'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
+    feedback_id: Mapped[str] = mapped_column(ForeignKey('feedbacks.id'), index=True)
+    body: Mapped[str] = mapped_column(String(200))
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    __table_args__ = (Index('idx_feedback_notice_user', 'user_id', 'is_read', 'created_at'),)
