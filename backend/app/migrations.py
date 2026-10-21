@@ -1,8 +1,25 @@
 """Idempotent upgrades for the existing SQLite/PostgreSQL database."""
-from sqlalchemy import inspect, text
+from datetime import timedelta
+from sqlalchemy import inspect, text, select, update, or_
 from sqlalchemy.schema import CreateTable
 
-from .models import Base, Wanted
+from .models import Base, Wanted, LoginSession
+
+
+def upgrade_login_sessions(engine):
+    with engine.begin() as conn:
+        columns = {c['name'] for c in inspect(conn).get_columns('login_sessions')}
+        for name in ('created_at', 'refreshed_at'):
+            if name not in columns:
+                conn.execute(text(f'ALTER TABLE login_sessions ADD COLUMN {name} TIMESTAMP'))
+        # Old sessions had a fixed one-day lifetime. Preserve their expiry;
+        # an expired session must never regain access during migration.
+        table = LoginSession.__table__
+        rows = conn.execute(select(table).where(or_(table.c.created_at.is_(None), table.c.refreshed_at.is_(None)))).mappings().all()
+        for row in rows:
+            created = row['created_at'] or row['expires_at'] - timedelta(days=1)
+            conn.execute(update(table).where(table.c.token_hash == row['token_hash']).values(
+                created_at=created, refreshed_at=row['refreshed_at'] or created))
 
 
 def upgrade_buyer_agent(engine):

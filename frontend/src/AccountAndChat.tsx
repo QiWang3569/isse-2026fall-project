@@ -98,9 +98,11 @@ export function EmailSignIn({ meta, intent, email, setEmail, code, setCode, sent
   );
 }
 
-export function AuthMethods({ meta, onSignedIn }: { meta: Meta; onSignedIn: (user: User) => void }) {
-  const [mode, setMode] = useState<"register" | "code" | "password" | "reset">("register");
-  const [email, setEmail] = useState("");
+export function AuthMethods({ meta, onSignedIn, initialMode = "register", initialEmail = "" }: {
+  meta: Meta; onSignedIn: (user: User) => void; initialMode?: "register" | "code" | "password"; initialEmail?: string;
+}) {
+  const [mode, setMode] = useState<"register" | "code" | "password" | "reset">(initialMode);
+  const [email, setEmail] = useState(initialEmail);
   const [code, setCode] = useState("");
   const [sent, setSent] = useState(false);
   return <div className="auth-methods">

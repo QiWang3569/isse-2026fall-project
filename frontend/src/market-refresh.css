@@ -13,6 +13,14 @@
 .intent-banner { padding: 16px 22px; margin-top: 16px; }
 .upload-button.upload-full { opacity: 0.55; cursor: default; }
 .upload-preview button:disabled { opacity: 0.5; cursor: wait; }
+.session-expired-banner {
+  position: fixed; z-index: 110; bottom: 20px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 16px; padding: 12px 18px;
+  width: max-content; max-width: calc(100% - 32px); border-radius: 12px;
+  background: var(--surface, #fff); color: var(--text, #294a37);
+  border: 1px solid #93ad99; box-shadow: 0 5px 24px #122b2133;
+}
+.session-expired-banner .button { flex-shrink: 0; }
 
 @media (max-height: 800px) and (min-width: 651px) {
   main { padding-top: 20px; }

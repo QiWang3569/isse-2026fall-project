@@ -200,11 +200,17 @@ export type Log = {
   created_at: string;
 };
 
+export class ApiError extends Error {
+  constructor(message: string, public status: number) { super(message); }
+}
+let authRevision = 0;
+
 export async function api<T>(
   path: string,
   method = "GET",
   data?: unknown,
 ): Promise<T> {
+  const requestAuthRevision = authRevision;
   const response = await fetch("/api/v1" + path, {
     method,
     credentials: "include",
@@ -219,17 +225,21 @@ export async function api<T>(
   });
   const result = await response.json().catch(() => null);
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith("/auth/") && requestAuthRevision === authRevision) {
+      window.dispatchEvent(new Event("yandu-session-expired"));
+    }
     const detail = result?.detail;
-    throw new Error(
+    throw new ApiError(
       typeof detail === "string"
         ? detail
         : Array.isArray(detail)
           ? detail
               .map((d: { msg: string }) => d.msg.replace("Value error, ", ""))
               .join("；")
-          : "服务连接失败，请稍后重试",
+          : "服务连接失败，请稍后重试", response.status,
     );
   }
+  if (method === "POST" && ["/auth/refresh", "/auth/demo", "/auth/email/verify", "/auth/password/login", "/auth/password/set", "/auth/logout"].includes(path)) authRevision++;
   return result as T;
 }
 export const money = (n: number) =>

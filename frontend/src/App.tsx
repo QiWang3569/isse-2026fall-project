@@ -81,6 +81,8 @@ import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
 import { SearchBar } from "./SearchBar";
 import { FeedbackCenter, FeedbackWorkspace, type FeedbackNotices } from "./Feedback";
 import { AnnouncementEntry } from "./AnnouncementEntry";
+import { useSessionRenewal } from "./session";
+import { SessionRecovery } from "./SessionRecovery";
 
 const nav = [
   { key: "market", label: "逛逛校园", icon: Compass },
@@ -191,6 +193,10 @@ export default function App() {
   const [theme, setTheme] = useState<"light" | "dark">(initialTheme);
   const [meta, setMeta] = useState<Meta | null>(null),
     [user, setUser] = useState<User | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [recoverSession, setRecoverSession] = useState(false);
+  const [sessionEpoch, setSessionEpoch] = useState(0);
+  useSessionRenewal(user?.id, setSessionExpired, sessionEpoch);
   const [view, setView] = useState<View>(currentView),
     [revision, setRevision] = useState(0);
   const [modal, setModal] = useState<ModalName>(null),
@@ -427,6 +433,8 @@ export default function App() {
       .catch(() => { seenAnnouncements.current.delete(key); });
   }, [user]);
   function signedIn(account: User) {
+    setSessionExpired(false);
+    setSessionEpoch((n) => n + 1);
     setUser(account);
     setCompare([]);
     if (feedbackAfterLogin.current) {
@@ -2429,6 +2437,18 @@ export default function App() {
           )}
         </Modal>
       )}
+      {sessionExpired && user && !recoverSession && <div className="session-expired-banner" role="status">
+        <span>登录已过期，当前填写内容已保留。</span>
+        <button className="button primary" onClick={() => setRecoverSession(true)}>重新登录</button>
+      </div>}
+      {recoverSession && user && <SessionRecovery user={user} meta={meta}
+        onClose={() => setRecoverSession(false)} onRecovered={(account) => {
+          setUser(account);
+          setSessionEpoch((n) => n + 1);
+          setSessionExpired(false);
+          setRecoverSession(false);
+          setToast("已重新登录，可继续刚才的操作");
+        }} />}
     </div>
   );
 }
