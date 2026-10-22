@@ -12,6 +12,7 @@
 
 ## 2026-10-22
 
+- 对话页支持卖家取消已确认的预订：卖家在 `RESERVED` 状态下点击「取消预订」，会话变为已取消、商品恢复在售并重新触发匹配。
 - 修复访客统计：排除爬虫与健康检查请求，对浏览器首次请求去重，匿名访客按 15 分钟滚动窗口计数。
 - 新增商业指标看板与 GMV / 动销率 / 停留时长指标：`frontend/src/AdminMetrics.tsx`；后端新增 `GET /api/v1/admin/analytics/user-growth`、`/visitor-funnel`、`/business-overview` 与 `POST /api/v1/analytics/dwell`，并新增 `PageDwellLog` 表。
 - 商品卡片标签全部展示并自动换行（`frontend/src/App.tsx` / `styles.css`）。

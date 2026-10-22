@@ -861,7 +861,7 @@ def create_app(settings: Settings | None = None):
                 'request': (buyer, {'NONE', 'DECLINED', 'CANCELED'}, 'ACTIVE', 'REQUESTED'),
                 'reserve': (not buyer, {'REQUESTED'}, 'ACTIVE', 'RESERVED'),
                 'decline': (not buyer, {'REQUESTED'}, None, 'DECLINED'),
-                'cancel': (buyer, {'REQUESTED', 'RESERVED'}, None, 'CANCELED'),
+                'cancel': (buyer or state == 'RESERVED', {'REQUESTED', 'RESERVED'}, None, 'CANCELED'),
                 'sold': (not buyer, {'RESERVED'}, 'RESERVED', 'SOLD'),
                 'confirm': (buyer, {'SOLD'}, 'SOLD', 'CONFIRMED'),
             }
