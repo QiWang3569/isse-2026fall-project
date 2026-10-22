@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowRight,
   Heart,
@@ -344,6 +345,9 @@ export function Card({
   );
 }
 
+let openDialogs = 0;
+let originalOverflow = "";
+
 export function Modal({
   title,
   children,
@@ -363,7 +367,7 @@ export function Modal({
   close.current = onClose;
   useEffect(() => {
     const old = document.activeElement as HTMLElement | null;
-    const overflow = document.body.style.overflow;
+    if (openDialogs++ === 0) originalOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     ref.current?.focus();
     function key(e: KeyboardEvent) {
@@ -397,12 +401,16 @@ export function Modal({
     }
     document.addEventListener("keydown", key);
     return () => {
-      document.body.style.overflow = overflow;
+      if (--openDialogs === 0) document.body.style.overflow = originalOverflow;
       document.removeEventListener("keydown", key);
-      old?.focus();
+      if (old?.isConnected) old.focus();
+      else queueMicrotask(() => {
+        const dialogs = document.querySelectorAll<HTMLElement>('[aria-modal="true"]');
+        dialogs[dialogs.length - 1]?.focus();
+      });
     };
   }, []);
-  return (
+  return createPortal(
     <div
       className="modal-backdrop"
       onMouseDown={(e) => {
@@ -430,7 +438,7 @@ export function Modal({
         </div>
         {children}
       </div>
-    </div>
+    </div>, document.body
   );
 }
 

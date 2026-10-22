@@ -27,6 +27,7 @@ from prometheus_client.core import GaugeMetricFamily
 
 from .config import ROOT, Settings
 from .feedback import register_feedback
+from .notification_center import register_notification_center
 from .schemas import AnnouncementReadRequest
 from .chat_email import ChatEmailRunner
 from .database import prepare_database, retire_demo_data
@@ -451,6 +452,8 @@ def create_app(settings: Settings | None = None):
         return [{'id': a.id, 'title': a.title, 'body': a.body, 'kind': a.kind,
                  'created_at': iso(a.created_at)} for a in rows]
 
+    register_notification_center(app, get_db, current_user, require_user, mutation_lock)
+
     @app.get('/api/v1/announcements/unread')
     def announcements_unread(db: Session = Depends(get_db), user: User = Depends(require_user)):
         read = select(AnnouncementRead.announcement_id).where(AnnouncementRead.user_id == user.id)
@@ -746,8 +749,9 @@ def create_app(settings: Settings | None = None):
 
     @app.get('/api/v1/conversations')
     def conversations(db: Session = Depends(get_db), user=Depends(require_user)):
+        unread = select(ChatMessage.conversation_id).where(ChatMessage.sender_id != user.id, ChatMessage.read_at.is_(None))
         rows = db.scalars(select(Conversation).where(or_(Conversation.buyer_id == user.id, Conversation.seller_id == user.id))
-                          .order_by(Conversation.last_message_at.desc()).limit(100)).all()
+                          .order_by(Conversation.id.in_(unread).desc(), Conversation.last_message_at.desc()).limit(100)).all()
         return [conversation_out(db, row, user) for row in rows]
 
     @app.get('/api/v1/conversations/{conversation_id}')
@@ -799,10 +803,12 @@ def create_app(settings: Settings | None = None):
             return message_out(message, db)
 
     @app.post('/api/v1/conversations/{conversation_id}/read')
-    def read_conversation(conversation_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+    def read_conversation(conversation_id: str, data: AnnouncementReadRequest,
+                          db: Session = Depends(get_db), user=Depends(require_user)):
         owned_conversation(db, conversation_id, user)
         db.execute(update(ChatMessage).where(ChatMessage.conversation_id == conversation_id,
-                   ChatMessage.sender_id != user.id, ChatMessage.read_at.is_(None)).values(read_at=now()))
+                   ChatMessage.sender_id != user.id, ChatMessage.id.in_(data.ids),
+                   ChatMessage.read_at.is_(None)).values(read_at=now()))
         db.commit()
         return {'ok': True}
 
@@ -1308,10 +1314,10 @@ def create_app(settings: Settings | None = None):
     def my_sale_feedback(db: Session = Depends(get_db), user=Depends(require_user)):
         rows = db.scalars(select(SaleFeedback).join(Item, Item.id == SaleFeedback.item_id)
                           .where(Item.seller_id == user.id, SaleFeedback.status == 'OPEN')
-                          .order_by(SaleFeedback.created_at.desc()).limit(100)).all()
+                          .order_by(SaleFeedback.read_at.is_(None).desc(), SaleFeedback.created_at.desc()).limit(100)).all()
         return [{'id': r.id, 'item': item_out(db.get(Item, r.item_id), db, user),
                  'reporter': user_out(db.get(User, r.reporter_id)),
-                 'created_at': iso(r.created_at)} for r in rows]
+                 'created_at': iso(r.created_at), 'is_read': r.read_at is not None} for r in rows]
 
     @app.post('/api/v1/items/{item_id}/sale-feedback/{feedback_id}/review')
     def review_sale_feedback(item_id: str, feedback_id: str, data: DealAction,
@@ -1497,8 +1503,11 @@ def create_app(settings: Settings | None = None):
         return {'ok': True}
 
     @app.get('/api/v1/notifications/')
-    def notifications(intent_id: str | None = None, db: Session = Depends(get_db), user=Depends(require_user)):
+    def notifications(intent_id: str | None = None, unread_only: bool = False,
+                      db: Session = Depends(get_db), user=Depends(require_user)):
         query = select(Notification).where(Notification.buyer_id == user.id, Notification.verdict != 'NO_MATCH')
+        if unread_only:
+            query = query.where(Notification.is_read == False)
         if intent_id is not None:
             owned_intent(db, intent_id, user)
             query = query.where(Notification.intent_id == intent_id)

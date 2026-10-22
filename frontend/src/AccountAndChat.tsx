@@ -312,7 +312,10 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, ini
   useEffect(() => {
     if (!activeId) return;
     let alive = true;
+    let loading = false;
     async function load() {
+      if (loading || document.visibilityState !== "visible") return;
+      loading = true;
       try {
         const result = await api<{ messages: ChatMessage[]; has_more: boolean }>(`/conversations/${activeId}/messages`);
         if (!alive) return;
@@ -323,17 +326,21 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, ini
         });
         if (!loadedOlder) setHasMore(result.has_more);
         setError("");
-        if (result.messages.some((message) => message.sender_id !== user.id && !message.read_at)) {
-          await api(`/conversations/${activeId}/read`, "POST");
+        const ids = result.messages.filter((message) => message.sender_id !== user.id && !message.read_at).map((message) => message.id);
+        if (ids.length && document.visibilityState === "visible" && !document.querySelector('[aria-modal="true"]')) {
+          await api(`/conversations/${activeId}/read`, "POST", { ids });
           if (alive) refresh();
         }
       } catch (cause) {
         if (alive) setError((cause as Error).message);
-      }
+      } finally { loading = false; }
     }
     void load();
     const timer = window.setInterval(() => void load(), 8000);
-    return () => { alive = false; clearInterval(timer); };
+    const visible = () => { void load(); };
+    document.addEventListener("visibilitychange", visible);
+    window.addEventListener("focus", visible);
+    return () => { alive = false; clearInterval(timer); document.removeEventListener("visibilitychange", visible); window.removeEventListener("focus", visible); };
   }, [activeId, user.id, refresh, loadedOlder]);
   useEffect(() => {
     if (loadingOlder.current) { loadingOlder.current = false; return; }
@@ -438,6 +445,11 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, ini
       setMessages((current) => [...result.messages, ...current]);
       setHasMore(result.has_more);
       setLoadedOlder(true);
+      const ids = result.messages.filter((message) => message.sender_id !== user.id && !message.read_at).map((message) => message.id);
+      if (ids.length && document.visibilityState === "visible") {
+        await api(`/conversations/${activeId}/read`, "POST", { ids });
+        refresh();
+      }
     } catch (cause) { setError((cause as Error).message); }
   }
   async function generateDraft() {

@@ -1,3 +1,5 @@
+import { notificationsChanged } from "./notificationEvents";
+
 export type User = {
   id: string;
   nickname: string;
@@ -157,6 +159,7 @@ export type SaleFeedbackNotice = {
   item: Item;
   reporter: User;
   created_at: string;
+  is_read: boolean;
 };
 export type Announcement = {
   id: string;
@@ -164,6 +167,7 @@ export type Announcement = {
   body: string;
   kind: "公告" | "更新";
   created_at: string;
+  is_read?: boolean | null;
 };
 export type AdminAnnouncement = Announcement & {
   active: boolean;
@@ -240,6 +244,7 @@ export async function api<T>(
     );
   }
   if (method === "POST" && ["/auth/refresh", "/auth/demo", "/auth/email/verify", "/auth/password/login", "/auth/password/set", "/auth/logout"].includes(path)) authRevision++;
+  if (method !== "GET" && /\/(?:notifications|conversations|feedback|sale-feedback|announcements)(?:\/|$)/.test(path)) notificationsChanged();
   return result as T;
 }
 export const money = (n: number) =>

@@ -177,6 +177,7 @@ class SaleFeedback(Base):
     reporter_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
     item_id: Mapped[str] = mapped_column(ForeignKey('items.id'))
     status: Mapped[str] = mapped_column(String(20), default='OPEN')
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     __table_args__ = (UniqueConstraint('reporter_id', 'item_id'),)
 
