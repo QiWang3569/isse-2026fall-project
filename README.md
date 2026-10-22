@@ -4,6 +4,8 @@
 
 燕渡是一个面向北大校园的二手交易平台：发布闲置、浏览好物、自然语言搜索、买家代蹲、站内聊天与完整交易状态流转，开箱即用，并配套 PostgreSQL + pgvector、HTTPS、监控与备份的部署能力。
 
+线上体验：[https://39.106.45.65/](https://39.106.45.65/)
+
 [![Application checks](https://github.com/QiWang3569/yandu/actions/workflows/checks.yml/badge.svg)](https://github.com/QiWang3569/yandu/actions/workflows/checks.yml)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
@@ -194,7 +196,7 @@ npm run build
 
 ## 部署
 
-生产环境使用 PostgreSQL + pgvector、Caddy HTTPS、每日数据库备份与安全 Cookie，编排见 [compose.production.yaml](compose.production.yaml)。先按 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) 准备 `.env` 与站点域名，再启动：
+当前公开站点：[https://39.106.45.65/](https://39.106.45.65/)。生产环境使用 PostgreSQL + pgvector、Caddy HTTPS、每日数据库备份与安全 Cookie，编排见 [compose.production.yaml](compose.production.yaml)。先按 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) 准备 `.env` 与站点域名，再启动：
 
 ```sh
 docker compose -f compose.production.yaml up -d --build
