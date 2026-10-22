@@ -2,7 +2,7 @@
 
 from sqlalchemy import delete, text, update
 
-from .migrations import upgrade_buyer_agent, upgrade_marketplace
+from .migrations import upgrade_buyer_agent, upgrade_marketplace, upgrade_login_sessions
 from .models import Base, Intent, Item, LoginSession, Wanted
 # Register optional-feature tables for app startup and standalone migration tools.
 from . import chat_email  # noqa: F401
@@ -14,6 +14,7 @@ def prepare_database(engine):
             connection.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
 
     Base.metadata.create_all(engine)
+    upgrade_login_sessions(engine)
     upgrade_buyer_agent(engine)
     upgrade_marketplace(engine)
 

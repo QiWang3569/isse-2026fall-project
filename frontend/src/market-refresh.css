@@ -1,0 +1,45 @@
+/* Keep the marketplace within the initial viewport, including short laptops. */
+.hero { min-height: 230px; grid-template-columns: 1.4fr 1fr; }
+.hero-copy { padding: 20px 0 20px 28px; }
+.hero h1 { font-size: 30px; line-height: 1.25; margin: 10px 0 8px; letter-spacing: 2px; }
+.hero p { font-size: 12px; line-height: 1.5; margin: 0; }
+.hero .button { margin-top: 14px; padding: 10px 16px; font-size: 13px; }
+.hero-foot, .hero .handwritten { display: none; }
+.hero-art > svg { width: 100%; height: 100%; top: 0; left: 0; }
+.hero-orbit { width: 230px; height: 230px; top: 5px; }
+.hero .orbit-two { width: 175px; height: 175px; top: 30px; }
+.hero .note-one { top: 24px; }
+.hero .note-two { bottom: 22px; }
+.intent-banner { padding: 16px 22px; margin-top: 16px; }
+.upload-button.upload-full { opacity: 0.55; cursor: default; }
+.upload-preview button:disabled { opacity: 0.5; cursor: wait; }
+.session-expired-banner {
+  position: fixed; z-index: 110; bottom: 20px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 16px; padding: 12px 18px;
+  width: max-content; max-width: calc(100% - 32px); border-radius: 12px;
+  background: var(--surface, #fff); color: var(--text, #294a37);
+  border: 1px solid #93ad99; box-shadow: 0 5px 24px #122b2133;
+}
+.session-expired-banner .button { flex-shrink: 0; }
+
+@media (max-height: 800px) and (min-width: 651px) {
+  main { padding-top: 20px; }
+  .hero { min-height: 205px; }
+  .hero-copy { padding-top: 16px; padding-bottom: 16px; }
+  .hero h1 { font-size: 28px; }
+  .hero .eyebrow { display: none; }
+  .hero .button { margin-top: 10px; }
+  .intent-banner { padding-top: 12px; padding-bottom: 12px; margin-top: 12px; }
+}
+@media (max-width: 650px) {
+  .hero { min-height: 184px; grid-template-columns: 1fr; }
+  .hero-copy { padding: 18px; }
+  .hero .eyebrow, .hero-art { display: none; }
+  .hero h1 { font-size: 25px; letter-spacing: 1px; margin: 0 0 8px; }
+  .hero p { font-size: 12px; white-space: normal; }
+  .hero p br { display: none; }
+  .hero .button { margin-top: 12px; font-size: 12px; }
+  .intent-banner { padding: 12px; gap: 8px; margin-top: 12px; }
+  .intent-banner p { display: none; }
+  .intent-banner h2 { font-size: 14px; }
+}

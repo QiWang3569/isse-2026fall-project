@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, Check, ImagePlus, Sparkles, Trash2, X } from "lucide-react";
 import { api, type Meta, type Parsed, type ParsedItem, type Item, type ItemDraft, type Wanted, type Intent } from "./api";
 
 type Common = { meta: Meta; onDone: () => void };
+const MAX_ITEM_IMAGES = 9;
 
 export function IntentForm({
   meta,
@@ -323,6 +324,9 @@ export function PublishForm({
 }: Common & { prefill?: Wanted | null; editingItem?: Item | null; draft?: ItemDraft | null; onDraftSaved?: (draft: ItemDraft) => void; onBack?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const uploadLock = useRef(false);
+  const [uploadError, setUploadError] = useState("");
+  const [uploadProgress, setUploadProgress] = useState("");
   const [images, setImages] = useState<string[]>(editingItem?.images || draft?.images || []);
   const [error, setError] = useState("");
   const [raw, setRaw] = useState(draft?.raw || "");
@@ -387,24 +391,36 @@ export function PublishForm({
     }
   }
   async function upload(files: FileList | null) {
-    if (!files?.length) return;
-    if (images.length + files.length > 3) {
-      setError("最多上传 3 张照片");
+    if (!files?.length || uploadLock.current || busy) return;
+    const remaining = MAX_ITEM_IMAGES - images.length;
+    if (files.length > remaining) {
+      setUploadError(`还可添加 ${remaining} 张，本次选择了 ${files.length} 张，请重新选择。`);
       return;
     }
+    uploadLock.current = true;
     setUploading(true);
-    setError("");
+    setUploadError("");
+    const failures: string[] = [];
     try {
-      for (const file of Array.from(files)) {
-        const body = new FormData();
-        body.append("file", file);
-        const result = await api<{ url: string }>("/uploads", "POST", body);
-        setImages((prev) => [...prev, result.url]);
+      const selected = Array.from(files);
+      for (const [index, file] of selected.entries()) {
+        setUploadProgress(`正在上传 ${index + 1}/${selected.length}：${file.name}`);
+        try {
+          if (file.size > 6 * 1024 * 1024) throw new Error("每张图片不得超过 6 MB");
+          if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new Error("仅支持 JPG / PNG / WebP");
+          const body = new FormData();
+          body.append("file", file);
+          const result = await api<{ url: string }>("/uploads", "POST", body);
+          setImages((prev) => [...prev, result.url]);
+        } catch (e) {
+          failures.push(`${file.name}：${(e as Error).message}`);
+          setUploadError(failures.join("；"));
+        }
       }
-    } catch (e) {
-      setError((e as Error).message);
     } finally {
+      uploadLock.current = false;
       setUploading(false);
+      setUploadProgress("");
     }
   }
   async function submit(e: FormEvent<HTMLFormElement>) {
@@ -467,7 +483,7 @@ export function PublishForm({
       </button>
       <div>
         <span className="field-title">
-          商品照片 <small>选填，最多 3 张 · JPG / PNG / WebP · 每张不超过 6 MB</small>
+          商品照片 <small>选填，最多 9 张 · JPG / PNG / WebP · 每张不超过 6 MB</small>
         </span>
         <div className="upload-row">
           {images.map((url) => (
@@ -476,29 +492,31 @@ export function PublishForm({
               <button
                 type="button"
                 aria-label="移除这张照片"
-                onClick={() => setImages(images.filter((i) => i !== url))}
+                disabled={uploading || busy}
+                onClick={() => { setImages(images.filter((i) => i !== url)); setUploadError(""); }}
               >
                 <X size={14} />
               </button>
             </div>
           ))}
-          {images.length < 3 && (
-            <label className="upload-button">
+            <label className={`upload-button ${images.length >= MAX_ITEM_IMAGES ? "upload-full" : ""}`}>
               <ImagePlus size={25} />
-              <span>{uploading ? "上传中…" : "添加照片"}</span>
+              <span>{uploading ? "上传中…" : images.length >= MAX_ITEM_IMAGES ? "已满 9 张" : "添加照片"}</span>
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
                 multiple
-                disabled={uploading || busy}
+                aria-label="添加商品照片"
+                disabled={uploading || busy || images.length >= MAX_ITEM_IMAGES}
                 onChange={(e) => {
                   void upload(e.target.files);
                   e.target.value = "";
                 }}
               />
             </label>
-          )}
         </div>
+        <p className="hint" aria-live="polite">已上传 {images.length}/9 张，还可添加 {MAX_ITEM_IMAGES - images.length} 张{uploadProgress && ` · ${uploadProgress}`}</p>
+        {uploadError && <p className="form-error" role="alert">{uploadError}</p>}
       </div>
       <label>
         给好物起个名字

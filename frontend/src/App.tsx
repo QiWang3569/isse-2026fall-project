@@ -23,7 +23,6 @@ import {
   LogOut,
   Mail,
   MapPin,
-  Megaphone,
   Monitor,
   Moon,
   Pause,
@@ -80,6 +79,11 @@ import { IntentForm, PublishForm, PublishWorkspace, WantedForm } from "./forms";
 import { AuthMethods, ChatCenter, PasswordSetup } from "./AccountAndChat";
 import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
 import { SearchBar } from "./SearchBar";
+import { FeedbackCenter, FeedbackWorkspace, type FeedbackNotices } from "./Feedback";
+import { AnnouncementEntry } from "./AnnouncementEntry";
+import { useSessionRenewal } from "./session";
+import { SessionRecovery } from "./SessionRecovery";
+
 import { AdminMetrics, type BusinessOverviewData } from "./AdminMetrics";
 
 const nav = [
@@ -88,7 +92,7 @@ const nav = [
   { key: "intents", label: "我的代蹲", icon: Sparkles },
   { key: "profile", label: "我的主页", icon: UserRound },
 ];
-type View = "market" | "profile" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "mywanted" | "admin" | "admin-metrics" | "admin-chat" | "admin-reports" | "admin-logs";
+type View = "market" | "profile" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "mywanted" | "admin" | "admin-chat" | "admin-reports" | "admin-logs" | "admin-feedback" | "admin-metrics";
 type ModalName =
   | "login"
   | "intent"
@@ -98,6 +102,7 @@ type ModalName =
   | "compare"
   | "detail"
   | "announcements"
+  | "feedback"
   | null;
 const validViews = [
   "market",
@@ -113,6 +118,7 @@ const validViews = [
   "admin-chat",
   "admin-reports",
   "admin-logs",
+  "admin-feedback",
 ];
 function currentView(): View {
   const v = location.hash.slice(1).split("/")[0];
@@ -183,9 +189,17 @@ function useResource<T>(
 }
 
 export default function App() {
+  const [announcementRevision, setAnnouncementRevision] = useState(0);
+  const seenAnnouncements = useRef(new Set<string>());
+  const [feedbackId, setFeedbackId] = useState<string | null>(null);
+  const feedbackAfterLogin = useRef(false);
   const [theme, setTheme] = useState<"light" | "dark">(initialTheme);
   const [meta, setMeta] = useState<Meta | null>(null),
     [user, setUser] = useState<User | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [recoverSession, setRecoverSession] = useState(false);
+  const [sessionEpoch, setSessionEpoch] = useState(0);
+  useSessionRenewal(user?.id, setSessionExpired, sessionEpoch);
   const [view, setView] = useState<View>(currentView),
     [revision, setRevision] = useState(0);
   const [modal, setModal] = useState<ModalName>(null),
@@ -464,15 +478,26 @@ export default function App() {
     }
     return true;
   };
-  function markAnnouncementsRead() {
+  const markAnnouncementRead = useCallback((id: string) => {
     if (!user) return;
-    void api("/announcements/mark-read", "POST")
-      .then(() => refresh())
-      .catch(() => { /* Keep the unread badge until the next poll. */ });
-  }
+    const key = `${user.id}:${id}`;
+    if (seenAnnouncements.current.has(key)) return;
+    seenAnnouncements.current.add(key);
+    void api("/announcements/mark-read", "POST", { ids: [id] })
+      .then(() => setAnnouncementRevision((v) => v + 1))
+      .catch(() => { seenAnnouncements.current.delete(key); });
+  }, [user]);
   function signedIn(account: User) {
+    setSessionExpired(false);
+    setSessionEpoch((n) => n + 1);
     setUser(account);
     setCompare([]);
+    if (feedbackAfterLogin.current) {
+      feedbackAfterLogin.current = false;
+      setModal("feedback");
+      refresh();
+      return;
+    }
     const conversationId = currentConversation();
     setPendingConversation(conversationId);
     if (conversationId) {
@@ -648,8 +673,12 @@ export default function App() {
     "/announcements", revision, true,
   );
   const announcementUnread = useResource<{ count: number }>(
-    "/announcements/unread", revision, !!user, true,
+    "/announcements/unread", revision + announcementRevision, !!user, true,
   );
+  const siteFeedbackNotices = useResource<FeedbackNotices>(
+    "/feedback-notices", revision, !!user, true,
+  );
+  const openFeedback = (id: string | null = null) => { setFeedbackId(id); setModal("feedback"); };
   const visibleNotices = noticeIntent
     ? (taskNotices.data ?? []).filter((n) => n.intent_id === noticeIntent.id)
     : notices;
@@ -657,9 +686,9 @@ export default function App() {
   const chatUnread = (conversations.data ?? []).reduce((sum, c) => sum + c.unread_count, 0);
   const feedbackUnread = (saleFeedbackMine.data ?? []).length;
   const announcementUnreadCount = announcementUnread.data?.count ?? 0;
-  const allUnread = unread + chatUnread + feedbackUnread + announcementUnreadCount;
+  const allUnread = unread + chatUnread + feedbackUnread + announcementUnreadCount + (siteFeedbackNotices.data?.count ?? 0);
   const personalView = ["profile", "intents", "messages", "favorites", "mine", "mywanted"].includes(view);
-  const adminView = ["admin", "admin-metrics", "admin-chat", "admin-reports", "admin-logs"].includes(view);
+  const adminView = ["admin", "admin-chat", "admin-reports", "admin-logs", "admin-feedback", "admin-metrics"].includes(view);
 
   if (!meta)
     return (
@@ -804,16 +833,6 @@ export default function App() {
               {key === "profile" && chatUnread > 0 && <span className="nav-new">{chatUnread}</span>}
             </button>
           ))}
-          <button
-            className={`nav-item ${modal === "announcements" ? "active" : ""}`}
-            onClick={() => {
-              setModal("announcements");
-              markAnnouncementsRead();
-            }}
-          >
-            <Megaphone size={20} strokeWidth={1.7} />
-            <span>系统公告</span>
-          </button>
           {user?.role === "admin" && (
             <button
               className={`nav-item ${adminView ? "active" : ""}`}
@@ -825,6 +844,7 @@ export default function App() {
           )}
         </nav>
         <div className="sidebar-bottom">
+          <div className="contact-actions">
           <button
             className="sidebar-contact"
             onClick={() => void copy("pkuyandu@163.com", "邮箱已复制")}
@@ -832,9 +852,13 @@ export default function App() {
             <Mail size={15} />
             <span>
               <strong>联系我们</strong>
-              <small>pkuyandu@163.com</small>
             </span>
           </button>
+          <button type="button" className="sidebar-contact" onClick={() => openFeedback()}>
+            <MessageCircle size={15} /><span><strong>意见反馈</strong></span>
+          </button>
+          </div>
+          <small className="contact-email">pkuyandu@163.com</small>
         </div>
       </aside>
       <div className="main-shell">
@@ -873,11 +897,8 @@ export default function App() {
               className="notification-button icon-button"
               aria-label={`通知${allUnread ? `，${allUnread} 条未读` : ""}`}
               onClick={() => {
-                if (needUser()) {
-                  setNoticeIntent(null);
-                  setModal("notifications");
-                  markAnnouncementsRead();
-                }
+                setNoticeIntent(null);
+                setModal("notifications");
               }}
             >
               <Bell size={21} />
@@ -1815,12 +1836,15 @@ export default function App() {
           <footer>
             <Brand small />
             <span>校园生活的另一种循环</span>
+            <div className="footer-contact-actions">
             <button
               className="footer-contact"
               onClick={() => void copy("pkuyandu@163.com", "邮箱已复制")}
             >
               联系我们
             </button>
+            <button type="button" className="footer-contact" onClick={() => openFeedback()}>意见反馈</button>
+            </div>
           </footer>
         </main>
       </div>
@@ -1876,7 +1900,7 @@ export default function App() {
       {modal === "login" && (
         <Modal
           title={user ? "当前账号" : "欢迎来到燕渡"}
-          onClose={() => setModal(null)}
+          onClose={() => { feedbackAfterLogin.current = false; setModal(null); }}
         >
           <div className="stack-form">
             {user?.email && <p className="auth-description">已验证邮箱：{user.email}<br />
@@ -2014,6 +2038,13 @@ export default function App() {
           />
         </Modal>
       )}
+      {modal === "feedback" && (
+        <Modal title="意见反馈" onClose={() => setModal(null)}>
+          <FeedbackCenter key={`${user?.id ?? "guest"}-${feedbackId ?? "new"}`} user={user}
+            initialId={feedbackId} onChange={refresh}
+            onLogin={() => { feedbackAfterLogin.current = true; setModal("login"); }} />
+        </Modal>
+      )}
       {modal === "notifications" && (
         <Modal
           title={noticeIntent ? "这个愿望发现的好物" : "燕渡为你捎来的消息"}
@@ -2041,23 +2072,27 @@ export default function App() {
             </>
           ) : (
             <div className="notice-center">
+              {!!siteFeedbackNotices.data?.count && (
+                <section className="notice-group">
+                  <h3 className="notice-group-title">意见反馈回复</h3>
+                  {siteFeedbackNotices.data.items.map((n) => (
+                    <article className="notice unread" key={n.id}>
+                      <strong>{n.body}</strong>
+                      <button type="button" className="text-button" onClick={() => openFeedback(n.feedback_id)}>查看反馈与回复 →</button>
+                    </article>
+                  ))}
+                </section>
+              )}
               {(announcements.data ?? []).length > 0 && (
                 <section className="notice-group">
                   <h3 className="notice-group-title">公告与更新</h3>
                   {(announcements.data ?? []).slice(0, 3).map((a) => (
-                    <article className="notice" key={a.id}>
-                      <div>
-                        <span className="task-status">{a.kind}</span>
-                        <h3>{a.title}</h3>
-                        <p>{a.body}</p>
-                      </div>
-                    </article>
+                    <AnnouncementEntry key={a.id} announcement={a} compact onSeen={markAnnouncementRead} />
                   ))}
                   <button
                     className="text-button"
                     onClick={() => {
                       setModal("announcements");
-                      markAnnouncementsRead();
                     }}
                   >
                     查看全部公告
@@ -2193,16 +2228,7 @@ export default function App() {
           {(announcements.data ?? []).length ? (
             <div className="announcement-list">
               {(announcements.data ?? []).map((a) => (
-                <article className="announcement" key={a.id}>
-                  <span
-                    className={`announcement-kind ${a.kind === "更新" ? "update" : ""}`}
-                  >
-                    {a.kind}
-                  </span>
-                  <h3>{a.title}</h3>
-                  <p>{a.body}</p>
-                  <time>{new Date(a.created_at).toLocaleString("zh-CN")}</time>
-                </article>
+                <AnnouncementEntry key={a.id} announcement={a} onSeen={markAnnouncementRead} />
               ))}
             </div>
           ) : (
@@ -2466,17 +2492,30 @@ export default function App() {
           )}
         </Modal>
       )}
+      {sessionExpired && user && !recoverSession && <div className="session-expired-banner" role="status">
+        <span>登录已过期，当前填写内容已保留。</span>
+        <button className="button primary" onClick={() => setRecoverSession(true)}>重新登录</button>
+      </div>}
+      {recoverSession && user && <SessionRecovery user={user} meta={meta}
+        onClose={() => setRecoverSession(false)} onRecovered={(account) => {
+          setUser(account);
+          setSessionEpoch((n) => n + 1);
+          setSessionExpired(false);
+          setRecoverSession(false);
+          setToast("已重新登录，可继续刚才的操作");
+        }} />}
     </div>
   );
 }
 
-type AdminView = "admin" | "admin-metrics" | "admin-chat" | "admin-reports" | "admin-logs";
+type AdminView = "admin" | "admin-chat" | "admin-reports" | "admin-logs" | "admin-feedback" | "admin-metrics";
 
 const adminTabs = [
   { key: "admin", label: "公告管理" },
   { key: "admin-metrics", label: "商业指标与访客" },
   { key: "admin-chat", label: "聊天举报" },
   { key: "admin-reports", label: "商品举报" },
+  { key: "admin-feedback", label: "用户反馈" },
   { key: "admin-logs", label: "操作记录" },
 ] as const;
 
@@ -2624,6 +2663,7 @@ function Admin({
       setBusy(false);
     }
   }
+  if (view === "admin-feedback") return <FeedbackWorkspace key={user.id} admin onChange={refresh} />;
   return (
     <>
       <Intro
