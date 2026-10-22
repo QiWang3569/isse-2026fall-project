@@ -4,7 +4,7 @@
 
 燕渡是一个面向北大校园的二手交易平台：发布闲置、浏览好物、自然语言搜索、买家代蹲、站内聊天与完整交易状态流转，开箱即用，并配套 PostgreSQL + pgvector、HTTPS、监控与备份的部署能力。
 
-[![Application checks](https://github.com/QiWang3569/isse-2026fall-project/actions/workflows/checks.yml/badge.svg)](https://github.com/QiWang3569/isse-2026fall-project/actions/workflows/checks.yml)
+[![Application checks](https://github.com/QiWang3569/yandu/actions/workflows/checks.yml/badge.svg)](https://github.com/QiWang3569/yandu/actions/workflows/checks.yml)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Node.js 22](https://img.shields.io/badge/Node.js-22-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -13,7 +13,7 @@
 [![tests](https://img.shields.io/badge/tests-187%20passed-brightgreen)](#测试与覆盖率)
 [![coverage](https://img.shields.io/badge/coverage-92%25-2ea44f)](#测试与覆盖率)
 
-> 仓库目前为私有仓库，仅对获得访问权限的协作者可见。需要代码请先联系仓库所有者获取权限。
+> 本仓库已转为公开（public）。请勿把本地 `.env`、数据库、图片或密钥提交到仓库。
 
 ## 项目简介
 
@@ -22,14 +22,16 @@
 核心亮点：
 
 - 校园邮箱验证码与密码登录（仅接受 `@pku.edu.cn` / `@stu.pku.edu.cn`）。
-- 商品发布（0–3 张图片、自然语言智能识别填充、批量导入待发布草稿）。
+- 登录会话闲置 7 天过期，前台操作时自动续期，最长 30 天需重新登录；后台轮询不续期，退出或重置密码撤销会话。
+- 商品发布（0–9 张图片、自然语言智能识别填充、批量导入待发布草稿）。
 - 分类 / 关键词 / 校区 / 价格 / 成色筛选、排序、收藏、三件对比与分享链接。
 - 顶栏「智能」搜索：一句话解析出分类、预算、成色、关键词并返回结果。
 - 买家代蹲：条件解析、持久化后台匹配、模型精筛、去重通知，服务重启后恢复任务。
 - 求购看板与代蹲联动，商品 / 求购 / 代蹲持续有效，无自动到期。
 - 站内文字 / 图片聊天、交易状态机、拉黑、消息举报与管理员审核。
+- 站内意见反馈：提交问题与截图，管理员回复并更新状态，结果通过站内通知送达。
 - 未读站内信邮件提醒（默认延迟 5 分钟并合并同一会话）。
-- 管理员工作台：公告管理、聊天 / 商品举报、操作记录审计，以及商业指标与访客分析看板。
+- 管理员工作台：公告管理、用户反馈、聊天 / 商品举报、操作记录审计，以及商业指标与访客分析看板。
 - 暗色模式、响应式移动端布局。
 
 ## 技术栈
@@ -51,7 +53,7 @@ flowchart LR
     U[用户浏览器] -->|HTTPS :443| C[Caddy 反向代理]
     C -->|:8000| A[FastAPI 应用]
     A --> D[(PostgreSQL 16 + pgvector)]
-    A --> F[文件存储<br/>data/uploads · chat-uploads]
+    A --> F[文件存储<br/>data/uploads · chat-uploads · feedback-uploads]
     A -->|SMTP| M[邮件服务]
     A -.可选.-> L[DeepSeek / Embedding API]
     A -->|/metrics| P[Prometheus]
@@ -65,11 +67,12 @@ flowchart LR
 
 - 北大邮箱验证码注册、登录，注册时设置密码；邮箱 + 密码登录；验证邮箱后重置密码。
 - 密码使用加盐 `scrypt` 摘要存储；登录限流、验证码频率限制、HttpOnly / SameSite Cookie 与来源校验。
+- 会话闲置 7 天过期、最长 30 天；前台操作续期，退出或重置密码立即撤销。
 - 演示模式提供林同学（买家）、许同学（卖家）、管理员三个本地身份，`DEMO_MODE=false` 时彻底关闭。
 
 ### 商品与搜索
 
-- 发布商品可选 0–3 张图片，支持自然语言智能识别填充与按行批量导入待发布草稿。
+- 发布、编辑和草稿最多 9 张图片，每张不超过 6 MB；支持自然语言智能识别填充与按行批量导入待发布草稿。
 - 分类、关键词、校区、价格、成色筛选与排序分页；收藏分类与同校区优先的基础推荐。
 - 智能搜索将自然语言解析为分类、预算、成色、关键词，支持“左右/大约”等约数价格。
 - 商品撤回、成交后「再发一件」、待确认收货禁止重新上架。
@@ -80,15 +83,17 @@ flowchart LR
 - 后台任务持久化、自动重试、手动重试、重启恢复；通知去重与已读状态。
 - 发布求购自动关联代蹲，修改 / 暂停 / 结束状态双向同步；私密代蹲可发布到公开看板。
 
-### 站内聊天与交易
+### 站内聊天、反馈与交易
 
 - 买家主动发起会话，支持文字、图片与图文消息，未读提示与历史分页。
 - 交易状态机：申请预订 → 确认 / 拒绝 → 售出 → 确认收货；拉黑与消息举报。
 - 未读站内信邮件提醒，延迟 5 分钟合并发送，并保留投递队列与重试记录。
+- 站内意见反馈支持问题与截图、我的反馈与补充；管理员回复并更新状态，结果通过站内通知送达。
 
 ### 治理与数据
 
-- 管理员工作台：公告管理、聊天举报、商品举报、操作记录；文字风险词与同名商品线索。
+- 管理员工作台：公告管理、用户反馈、聊天举报、商品举报、操作记录；文字风险词与同名商品线索。
+- 公告统一从消息铃铛查看，登录用户仅把实际展示的公告标为已读。
 - 商业指标看板：用户增长、访客漏斗、GMV、动销率、停留时长与犹豫商品。
 - Prometheus 导出应用指标与自定义业务指标（活跃用户、会话、GMV、停留时长等）。
 
@@ -99,6 +104,13 @@ flowchart LR
 - Python 3.12
 - Node.js 22
 - （可选）Docker，用于 PostgreSQL / pgvector 与生产部署
+
+### 获取代码
+
+```shell
+git clone https://github.com/QiWang3569/yandu.git
+cd yandu
+```
 
 ### Windows
 
@@ -182,7 +194,7 @@ npm ci
 npm run build
 ```
 
-最新一次本地运行：187 项测试全部通过，整体行覆盖率 92%。GitHub Actions 会在推送与合并请求时，分别在 Windows 与 Linux 上执行后端测试和前端构建，结果见 [Actions](https://github.com/QiWang3569/isse-2026fall-project/actions)。
+最新一次本地运行：187 项测试全部通过，整体行覆盖率 92%。GitHub Actions 会在推送与合并请求时，分别在 Windows 与 Linux 上执行后端测试和前端构建，结果见 [Actions](https://github.com/QiWang3569/yandu/actions)。
 
 ## 部署
 
@@ -217,8 +229,9 @@ data/                   数据库、图片、日志（不提交）
 - [PostgreSQL 接入与迁移](docs/POSTGRESQL.md)
 - [邮箱登录与站内聊天](docs/EMAIL_AND_CHAT.md)
 - [买家助手说明](docs/BUYER_AGENT.md)
+- [站内意见反馈](docs/FEEDBACK.md)
 - [修改日志](docs/CHANGELOG.md) / [验证记录](docs/VALIDATION.md)
 
 ## 许可证与贡献
 
-本项目为课程与内部使用项目，暂未随附开源许可证。仓库当前为私有，代码使用需联系仓库所有者授权；请勿把本地 `.env`、数据库、图片或密钥提交到仓库。
+本项目暂未随附开源许可证，代码使用需联系仓库所有者授权；请勿把本地 `.env`、数据库、图片或密钥提交到仓库。

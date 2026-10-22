@@ -20,7 +20,14 @@ class ItemCreate(StrictModel):
     campus: str
     condition_grade: str = '95新'
     tags: list[str] = Field(default_factory=list, max_length=8)
-    images: list[str] = Field(default_factory=list, max_length=3)
+    images: list[str] = Field(default_factory=list, max_length=9)
+
+    @field_validator('images')
+    @classmethod
+    def images_valid(cls, v):
+        if len(v) != len(set(v)):
+            raise ValueError('不能重复添加同一张图片')
+        return v
 
     @field_validator('category')
     @classmethod
@@ -123,7 +130,8 @@ class ItemUpdate(StrictModel):
     campus: str | None = None
     condition_grade: str | None = None
     tags: list[str] | None = Field(default=None, max_length=8)
-    images: list[str] | None = Field(default=None, max_length=3)
+    images: list[str] | None = Field(default=None, max_length=9)
+    images_valid = field_validator('images')(classmethod(lambda cls, v: ItemCreate.images_valid(v) if v is not None else None))
 
     category_valid = field_validator('category')(classmethod(lambda cls, v: ItemCreate.category_valid(v) if v is not None else None))
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v) if v is not None else None))
@@ -235,6 +243,10 @@ class AnnouncementUpdate(StrictModel):
     active: bool | None = None
 
 
+class AnnouncementReadRequest(StrictModel):
+    ids: list[str] = Field(min_length=1, max_length=50)
+
+
 class ItemParseRequest(StrictModel):
     raw: str = Field(min_length=5, max_length=3000)
 
@@ -252,7 +264,8 @@ class ItemDraftUpdate(StrictModel):
     campus: str | None = None
     condition_grade: str | None = None
     tags: list[str] | None = Field(default=None, max_length=8)
-    images: list[str] | None = Field(default=None, max_length=3)
+    images: list[str] | None = Field(default=None, max_length=9)
+    images_valid = field_validator('images')(classmethod(lambda cls, v: ItemCreate.images_valid(v) if v is not None else None))
 
     category_valid = field_validator('category')(classmethod(lambda cls, v: ItemCreate.category_valid(v) if v is not None else None))
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v) if v is not None else None))

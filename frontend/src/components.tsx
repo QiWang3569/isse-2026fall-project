@@ -367,11 +367,14 @@ export function Modal({
     document.body.style.overflow = "hidden";
     ref.current?.focus();
     function key(e: KeyboardEvent) {
+      // Only the top dialog owns focus/escape when session recovery overlays a form.
+      const dialogs = document.querySelectorAll('[aria-modal="true"]');
+      if (dialogs[dialogs.length - 1] !== ref.current) return;
       if (e.key === "Escape") close.current();
       if (e.key === "Tab") {
-        const nodes = ref.current?.querySelectorAll<HTMLElement>(
+        const nodes = [...(ref.current?.querySelectorAll<HTMLElement>(
           "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]",
-        );
+        ) ?? []), ...document.querySelectorAll<HTMLElement>(".session-expired-banner button")];
         if (!nodes?.length) return;
         const first = nodes[0],
           last = nodes[nodes.length - 1];
