@@ -503,8 +503,9 @@ export function ChatCenter({ user, conversations, initialItem, initialDraft, ini
                 <button className="text-button" disabled={busy} onClick={() => void changeDeal("decline")}>拒绝预订</button></>}
               {user.id === active.buyer_id && ["REQUESTED", "RESERVED"].includes(active.deal_status) &&
                 <button className="text-button" disabled={busy} onClick={() => void changeDeal("cancel")}>取消预订</button>}
-              {user.id === active.seller_id && active.deal_status === "RESERVED" &&
-                <button className="text-button" disabled={busy} onClick={() => void changeDeal("sold")}>确认售出</button>}
+              {user.id === active.seller_id && active.deal_status === "RESERVED" && <>
+                <button className="text-button" disabled={busy} onClick={() => void changeDeal("sold")}>确认售出</button>
+                <button className="text-button" disabled={busy} onClick={() => void changeDeal("cancel")}>取消预订</button></>}
               {user.id === active.buyer_id && active.deal_status === "SOLD" &&
                 <button className="text-button" disabled={busy} onClick={() => void changeDeal("confirm")}>确认已收到</button>}
             </div>}

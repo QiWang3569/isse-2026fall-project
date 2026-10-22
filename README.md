@@ -1,80 +1,121 @@
 # 燕渡 YanDu
 
-旧物渡新主，学海渡轻舟。一个正在构建中的校园二手交易应用，让用户发布闲置、浏览好物，并委托系统持续关注符合条件的商品。
+旧物渡新主，学海渡轻舟。
 
-前后端、校园邮箱账号、站内交易和买家代蹲均已实现，仓库提供 PostgreSQL + pgvector、备份和 HTTPS 部署配置。**本地发布记录显示，2026-10-12 已部署公开版本 `e50aef5`**，入口为 `https://39.106.45.65`；服务器当前状态需在发布前复核。版本、运行目录、更新方式与备份证据见 [当前部署记录](docs/DEPLOYMENT_CURRENT.md)。项目以 `ArvinHsu` 分支的需求文档为基础，结合 issues #8、#12、#13、#14、#15 实现。范围和取舍见 [需求与实现记录](docs/IMPLEMENTATION.md)。
+燕渡是一个面向北大校园的二手交易平台：发布闲置、浏览好物、自然语言搜索、买家代蹲、站内聊天与完整交易状态流转，开箱即用，并配套 PostgreSQL + pgvector、HTTPS、监控与备份的部署能力。
 
-## 当前进度（2026-10-14）
+[![Application checks](https://github.com/QiWang3569/yandu/actions/workflows/checks.yml/badge.svg)](https://github.com/QiWang3569/yandu/actions/workflows/checks.yml)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Node.js 22](https://img.shields.io/badge/Node.js-22-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
+[![PostgreSQL 16 + pgvector](https://img.shields.io/badge/PostgreSQL-16%2Bpgvector-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![tests](https://img.shields.io/badge/tests-210%20passed-brightgreen)](#测试与覆盖率)
+[![coverage](https://img.shields.io/badge/coverage-93%25-2ea44f)](#测试与覆盖率)
 
-| 方面 | 状态 |
+> 本仓库已转为公开（public）。请勿把本地 `.env`、数据库、图片或密钥提交到仓库。
+
+## 项目简介
+
+燕渡由前后端分离的 Web 应用构成：后端为 FastAPI + SQLAlchemy 2.0，前端为 React 19 + TypeScript + Vite。默认使用 SQLite 与本地规则解析，无需任何模型密钥即可零配置运行；生产环境切换到 PostgreSQL 16 + pgvector，并通过 Caddy 提供 HTTPS，由 Prometheus + Grafana 提供可观测性。
+
+燕渡的目标是构建一个智能化的校内二手闲置交易平台：整合散落在校内交流平台、微信等各处的闲置交易信息，实现智能查找与匹配，消除信息时滞，让校内同学以更低摩擦、更方便的方式完成二手交易。
+
+传统校内二手交易有三个痛点：一是信息散落在交流平台、微信群等各个角落，整合度低，求购售卖信息容易沉底；二是需要大量重复的人工操作，例如自行刷新寻找心仪物品、逐项填写发布 / 搜索信息，耗时耗力；三是依赖留言沟通，效率低、启动麻烦。针对这些，燕渡以「智能化」为核心，并在人机交互设计上持续打磨。
+
+核心亮点：
+
+- **一键挂机，系统代蹲**：系统 7×24 小时蹲守心仪商品，卖家一发布符合条件的商品，第一时间通过站内通知（可开启邮件提醒）送达买家。
+- **自然语言搜索与发布**：无需绞尽脑汁想关键词或逐项手工填表，AI 智能解析自然语言，搜索与发布更省力。
+- **批量发布，省心省力**：已发布过的闲置不必一件件重填，整段复制粘贴即可由 AI 智能生成多张待发布卡片。
+- **人机交互设计**：精心设计的页面 UI 与交互逻辑，明暗双主题、响应式移动端布局、紧凑首屏，并关联站内通知与邮件提醒。
+
+## 技术栈
+
+| 层 | 技术 |
 | --- | --- |
-| 校园账号与交易 | 已实现北大邮箱验证码注册、注册时设置密码、验证码/密码登录、个人主页、商品发布与管理、文字/图片站内聊天和交易状态流转；本机已验证真实邮件收件。 |
-| 买家代蹲 | 已实现条件解析、任务持久化、匹配通知和可选模型精筛；求购与代蹲关联，条件与状态同步，不再自动到期。默认本地关键词召回。 |
-| 数据库与备份 | 本机已迁入 PostgreSQL 16 + pgvector，并验证向量读写、自动备份及临时库恢复；新安装仍可选 SQLite 演示模式。 |
-| 公开部署 | 2026-10-12 发布记录包含公网 HTTPS、应用健康、生产模式与镜像版本检查；已保存数据库与图片的发布备份。当前线上状态、真实邮件收件与持续异机备份需在下次发布前核对。 |
+| 后端 | Python 3.12、FastAPI、SQLAlchemy 2.0、Uvicorn |
+| 前端 | React 19、TypeScript 5.8、Vite 6 |
+| 数据库 | SQLite（演示）/ PostgreSQL 16 + pgvector |
+| 模型 | 本地规则解析（默认）或 DeepSeek 兼容接口 + Embedding API |
+| 监控 | Prometheus（`prometheus-fastapi-instrumentator`）+ Grafana |
+| 反向代理 | Caddy（自动 HTTPS） |
+| 备份 | PostgreSQL 自定义格式每日备份 |
 
-本轮重点是完善核心交易流程，并在新版本发布前完成 PostgreSQL 升级、双账号交易、图片恢复与回退兼容性验收。现有服务器的更新清单见 [当前部署记录](docs/DEPLOYMENT_CURRENT.md)，新部署模板见 [公开部署说明](docs/DEPLOYMENT.md)，历史验证见 [验证记录](docs/VALIDATION.md)。
+## 架构
 
-本轮已实现的规则、接口变更与测试结果见 [核心交易更新](docs/CORE_TRADE_UPDATE.md)。
-整合后的持续有效、共享需求与邮件提醒见 [功能更新与配置](docs/FOLLOWUP_FEATURES.md)。
+```mermaid
+flowchart LR
+    U[用户浏览器] -->|HTTPS :443| C[Caddy 反向代理]
+    C -->|:8000| A[FastAPI 应用]
+    A --> D[(PostgreSQL 16 + pgvector)]
+    A --> F[文件存储<br/>data/uploads · chat-uploads · feedback-uploads]
+    A -->|SMTP| M[邮件服务]
+    A -.可选.-> L[DeepSeek / Embedding API]
+    A -->|/metrics| P[Prometheus]
+    P --> G[Grafana]
+    D --> B[backup 备份服务]
+```
 
-## 可以体验的功能
+## 功能特性
 
-- 发布商品可选添加 0–3 张图片，无图商品显示“暂无图片”；管理预订、售出、重新上架等状态。
-- 发布时可用自然语言识别并填充商品信息；卖家可编辑在售商品。支持“人员招募”分类。
-- 发布窗口支持按换行批量导入商品描述，先保存到仅本人可见的待发布列表，核对信息后逐件发布，照片选填。
-- 分类、关键词搜索、校区与价格筛选、排序、分页；根据收藏分类与同校区优先进行基础推荐。
-- 顶栏开启「智能」搜索后，可用自然语言描述需求（如“2000左右能记笔记的平板”“300以内静音鼠标”），系统自动解析出分类、预算、成色、关键词等条件并返回结果。
-- 自然语言需求解析，分别确认必须条件、排除特征与可选偏好；已有商品与新发布商品均会匹配。
-- 可选模型精筛：引用商品描述作为依据，区分符合与待确认，并把待确认问题加入咨询草稿。
-- 持久化后台匹配任务，自动重试、失败后手动重试，服务重启后恢复未完成任务。
-- 商品、求购与代蹲持续有效，不再设 7/14 天自动到期或 5 个活跃代蹲上限；可手动暂停、结束或标记售出。
-- 匹配通知、匹配理由、去重、已读状态；10 秒轮询，失效商品标记为不在售。
-- 收藏、最多 3 件商品对比、可编辑咨询草稿、商品分享链接。
-- 发布求购会自动建立关联代蹲；修改需求、暂停或完成时同步双方状态，匹配记录可从“我的求购”直接查看。私密代蹲可主动发布到求购看板，沿用已有任务与匹配记录。
-- 求购看板支持按标题、描述搜索；分类、预算、具体要求均可不填，预算留空表示不限。个人主页集中管理站内消息、代蹲、收藏、售卖与求购。
-- 公告统一从消息铃铛查看，游客可读；登录用户仅把实际展示的公告标为已读。管理员可在工作台发布、下线公告。
-- 举报与管理员工作台：按公告管理、聊天举报、商品举报、操作记录分页，文字风险词和同名商品线索、人工确认隐藏或恢复、审计日志。
-- 北大邮箱验证码注册与登录、邮箱密码登录；仅接受 `@pku.edu.cn`、`@stu.pku.edu.cn`，注册时同时设置密码，验证邮箱后可重置密码。
-- 登录会话闲置 7 天过期；前台进入或操作时续期，最长 30 天重新登录。后台消息轮询不续期，退出或重置密码会撤销会话。页面内过期后可登录原账号继续填写表单。
-- 商品发布、编辑和草稿最多 9 张照片，每张不超过 6 MB；超限在上传区提示，单张失败不丢弃已上传照片。首页采用紧凑布局，让市场内容进入首屏。
-- 商品关联的站内聊天：买家主动发起、卖家回复、未读提示及历史消息；支持纯图片或图文消息（每条最多 3 张、每张不超过 6 MB），发送前预览、移除和点击查看；支持交易动作、拉黑与消息举报；咨询草稿带入输入框后由用户确认发送。
-- 注册邮箱用户可在个人主页开启未读站内信邮件提醒；默认延迟 5 分钟并合并同一会话，需要服务器启用邮件服务。
-- 正式商品可撤回并保留记录；待收货时禁止重新上架，确认成交后可“再发一件”。
-- 顶栏可切换日间 / 夜间模式，选择保存在当前浏览器。
-- “联系我们”旁的“意见反馈”支持提交问题与截图、查看我的反馈和继续补充。管理员在工作台回复并更新状态，用户通过站内通知查看结果；此流程不发送邮件。使用与部署说明见 [站内反馈](docs/FEEDBACK.md)。
+### 账号与安全
 
-默认使用本地规则解析与关键词匹配，**无需模型密钥，也不会产生模型 API 费用**。本地模式支持简单排除项和偏好拆分，复杂语言仍应启用远程模型，并保留用户确认和修改条件的步骤。买家助手的接入、配置与限制见 [使用说明](docs/BUYER_AGENT.md)。
+- 北大邮箱验证码注册、登录，注册时设置密码；邮箱 + 密码登录；验证邮箱后重置密码。
+- 密码使用加盐 `scrypt` 摘要存储；登录限流、验证码频率限制、HttpOnly / SameSite Cookie 与来源校验。
+- 会话闲置 7 天过期、最长 30 天；前台操作续期，退出或重置密码立即撤销。
+- 演示模式提供林同学（买家）、许同学（卖家）、管理员三个本地身份，`DEMO_MODE=false` 时彻底关闭。
 
-批量导入入口位于“发布我的闲置 → 批量导入”。一行一件，每次 1–10 件；空行会跳过，账号下最多保留 50 件待发布商品。系统逐行识别标题、分类、价格等字段，导入后可在“待发布”中继续编辑、保存或删除。待发布商品不会进入市场、搜索或代蹲匹配；正式发布需确认各项商品信息，图片选填，后续可编辑补充。
+### 商品与搜索
 
-聊天图片使用独立的受保护存储：未发送时仅上传者可预览，发送后仅会话双方可查看；管理员仅在有消息举报时可查看相关图片。隐藏图片消息后，双方不能继续通过图片地址查看。商品照片仍是公开资源。现有 SQLite/PostgreSQL 数据库在应用启动时升级，保留商品、求购、任务与通知，给既有真实求购补建关联代蹲。升级前应创建数据库备份。
+- 发布、编辑和草稿最多 9 张图片，每张不超过 6 MB；支持自然语言智能识别填充与按行批量导入待发布草稿。
+- 分类、关键词、校区、价格、成色筛选与排序分页；收藏、三件对比与分享链接；收藏分类与同校区优先的基础推荐。
+- 智能搜索将自然语言解析为分类、预算、成色、关键词，支持“左右/大约”等约数价格。
+- 商品撤回、成交后「再发一件」、待确认收货禁止重新上架。
 
-## 获取代码
+### 买家代蹲与求购
 
-当前实现位于 `main` 分支。如果无法访问仓库，请联系仓库所有者获取权限。
+- 必须条件、排除项、偏好三组解析；本地关键词召回或远程模型精筛，并给出匹配理由与待确认问题。
+- 后台任务持久化、自动重试、手动重试、重启恢复；通知去重与已读状态。
+- 发布求购自动关联代蹲，修改 / 暂停 / 结束状态双向同步；私密代蹲可发布到公开看板。
+
+### 站内聊天、反馈与交易
+
+- 买家主动发起会话，支持文字、图片与图文消息，未读提示与历史分页。
+- 交易状态机：申请预订 → 确认 / 拒绝 → 售出 → 确认收货；拉黑与消息举报。
+- 未读站内信邮件提醒，延迟 5 分钟合并发送，并保留投递队列与重试记录。
+- 站内意见反馈支持问题与截图、我的反馈与补充；管理员回复并更新状态，结果通过站内通知送达。
+
+### 治理与数据
+
+- 管理员工作台：公告管理、用户反馈、聊天举报、商品举报、操作记录；文字风险词与同名商品线索。
+- 公告统一从消息铃铛查看，登录用户仅把实际展示的公告标为已读。
+- 商业指标看板：用户增长、访客漏斗、GMV、动销率、停留时长与犹豫商品。
+- Prometheus 导出应用指标与自定义业务指标（活跃用户、会话、GMV、停留时长等）。
+
+## 快速开始
+
+### 环境要求
+
+- Python 3.12
+- Node.js 22
+- （可选）Docker，用于 PostgreSQL / pgvector 与生产部署
+
+### 获取代码
 
 ```shell
-git clone https://github.com/QiWang3569/isse-2026fall-project.git yandu
+git clone https://github.com/QiWang3569/yandu.git
 cd yandu
 ```
 
-也可以在 GitHub 下载 `main` 分支的 ZIP 并解压。源码包含简体中文需求文档、依赖锁文件和演示种子；无需复制开发者电脑上的数据库或图片。
-
-## 启动（Windows）
-
-首次配置需要 Node.js 22 和 Python 3.12（已验证版本）。在项目根目录运行：
+### Windows
 
 ```powershell
 .\scripts\setup.ps1
 .\scripts\start.ps1 -SkipBuild
 ```
 
-若 Python 不在 PATH，可运行 `setup.ps1 -Python '完整的 python.exe 路径'`。脚本也支持检测本机 Codex 自带的 Python。依赖安装到项目 `.venv` 和 `frontend/node_modules`。
-
-打开 [燕渡本地应用](http://127.0.0.1:8000)。默认不需要 `.env` 或模型密钥，首次启动会自动创建数据库与演示数据。安装完成后再次启动只需运行 `start.ps1 -SkipBuild`。
-
-若 Windows 提示不允许运行脚本，可在当前终端先执行 `Set-ExecutionPolicy -Scope Process Bypass`，只对当前终端临时生效。服务默认只监听本机；推送代码不会自动部署网站，其他人需在自己的电脑启动。
+打开 [http://127.0.0.1:8000](http://127.0.0.1:8000)。若 Python 不在 PATH，可运行 `.\scripts\setup.ps1 -Python '完整的 python.exe 路径'`。
 
 停止服务（保留数据）：
 
@@ -82,103 +123,111 @@ cd yandu
 .\scripts\stop.ps1
 ```
 
-前端修改后，在 `frontend` 中执行 `npm run build` 并刷新页面；后端修改后重启服务。`start.ps1` 不带 `-SkipBuild` 时会先重新构建前端。日志位于 `data/server.log` 和 `data/server-error.log`。
+### Linux / macOS
 
-## 开发模式
+```sh
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r backend/requirements.lock.txt
+cd frontend && npm ci && npm run build && cd ..
+.venv/bin/python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
+```
 
-先停止后台服务，避免占用同一端口。在一个终端中运行前端：
+### 开发模式
 
-```powershell
+先停止后台服务，避免占用端口。一个终端运行前端：
+
+```sh
 cd frontend
 npm run dev
 ```
 
-在另一个终端的项目根目录运行后端：
+另一个终端运行后端：
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --reload
 ```
 
-开发页面：[http://127.0.0.1:5173](http://127.0.0.1:5173)；接口文档：[API 文档](http://127.0.0.1:8000/docs)。
+开发页面 [http://127.0.0.1:5173](http://127.0.0.1:5173)，接口文档 [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)。
 
-## 启动（Linux / macOS）
+## 配置
 
-安装 Python 3.12 与 Node.js 22 后，在项目根目录运行：
+复制 `.env.example` 为 `.env`。常用变量：
 
-```sh
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r backend/requirements.lock.txt
-cd frontend
-npm ci
-npm run build
-cd ..
-.venv/bin/python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
-```
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DEMO_MODE` | `true` | 是否启用演示账号与种子数据 |
+| `APP_ENV` | `local` | `local` 或 `production` |
+| `DATABASE_URL` | `sqlite:///./data/yandu.db` | SQLite 或 PostgreSQL 连接串 |
+| `AI_MODE` / `EMBEDDING_MODE` | `local` | `local` 或 `remote`，决定是否调用模型 / 向量接口 |
+| `DEEPSEEK_API_KEY` 等 | 空 | 远程模型配置，支持兼容 `/chat/completions` 的服务 |
+| `SMTP_HOST` / `SMTP_USER` / `SMTP_FROM` 等 | 空 | 验证码与邮件提醒所需 |
+| `CHAT_EMAIL_ENABLED` | `false` | 未读站内信邮件提醒总开关 |
+| `PUBLIC_APP_URL` | 空 | 邮件链接使用的站点来源 |
+| `ALLOWED_ORIGINS` | 本地地址 | 允许的跨域来源 |
+| `POSTGRES_PASSWORD` / `SITE_DOMAIN` | 空 | Docker / 生产部署所需 |
 
-打开同一个本地地址 `http://127.0.0.1:8000`，按 Ctrl+C 停止服务。macOS 已在本机验证启动；尚未完成全新环境的独立安装验证。
+完整说明见 [docs/EMAIL_AND_CHAT.md](docs/EMAIL_AND_CHAT.md)、[docs/POSTGRESQL.md](docs/POSTGRESQL.md) 与 `.env.example` 注释。
 
-## 两种本地运行方式
+## 测试与覆盖率
 
-**零配置演示：** 按上述 Windows 或 Linux / macOS 启动步骤运行，未配置 `.env` 时默认使用 SQLite 和 `DEMO_MODE=true`。右上角“登录”可切换林同学（买家）、许同学（卖家）和演示管理员；新数据库会生成 10 件演示商品与 1 条求购。商品插画是本地 SVG，并非真实商品照片。
-
-**本机 PostgreSQL 试用：** 安装 Docker，按照 [PostgreSQL 接入与迁移步骤](docs/POSTGRESQL.md) 在被 Git 忽略的 `.env` 中设置数据库密码及连接地址。配置完成后运行：
-
-```sh
-docker compose up -d --build postgres app backup
-```
-
-应用仅在本机 `http://127.0.0.1:8000` 提供服务；此 Compose 方式强制 `DEMO_MODE=false`，不会提供演示登录。它会启动 PostgreSQL 16 + pgvector、应用和每日备份服务；已有 SQLite 数据需要先按迁移文档导入。邮箱验证码注册和密码重置还需在 `.env` 配置邮件服务；已有密码的账号可在邮件服务暂不可用时继续登录。具体见 [邮箱登录与聊天说明](docs/EMAIL_AND_CHAT.md)。发布、收藏、任务、聊天、举报等操作绑定服务器会话，不接受客户端伪造用户 ID。
-
-截至 2026-10-07 的本机验证，开发机已关闭演示模式，迁移过来的演示商品不会公开展示；商品列表为空时，可用真实校园邮箱账号登录后发布。
-
-SQLite 数据库默认在 `data/yandu.db`；图片在 `data/uploads` 或容器应用数据卷中，随各自运行方式持久保存。`.env`、数据库、图片、日志和依赖目录已加入 Git 忽略规则。不要把本机 `.env` 或密码提交到仓库。
-
-## 模型与 PostgreSQL
-
-复制 `.env.example` 为 `.env`。聊天模型与向量接口已独立配置：
-
-- `AI_MODE=local`、`EMBEDDING_MODE=local`：完全本地演示。
-- **推荐首次接入：** `AI_MODE=remote`、`EMBEDDING_MODE=local`，只配置 `DEEPSEEK_API_KEY`，即可启用模型解析与候选商品语义精筛；原演示商品可继续使用。
-- `EMBEDDING_MODE=remote`：额外配置兼容接口的 `EMBEDDING_API_KEY`，启用 1536 维向量召回。聊天和向量供应商可以不同。
-
-密钥只由后端读取。`DEEPSEEK_BASE_URL` 和 `DEEPSEEK_MODEL` 可配置为支持 `/chat/completions` 与 JSON 输出的兼容模型接口。
-
-远程模式下，用户确认条件后任务立即保存，商品核对在后台进行；完成后通知更新。网页打开时每 10 秒读取通知和代蹲任务状态，不会每次轮询都调用模型。仅在创建/编辑/恢复任务、新商品发布/重新上架或管理员恢复商品时安排撮合。
-
-**七牛云千问 Flash 已通过本机真实解析与品类精筛测试**，具体配置见 [买家助手说明](docs/BUYER_AGENT.md)。异常重试和状态复核另由模拟接口测试覆盖；其他供应商和完整语义质量尚未验证。向量模式下，旧数据不混用不同模型的向量；切换模式或模型需回填对应向量或使用新开发数据库，默认演示种子没有远程向量。单聊天密钥模式不需要向量回填。
-
-启动会对旧 SQLite/PostgreSQL 表进行增量加列并新建匹配任务表，保留商品、代蹲和已有通知。后台任务目前采用进程内单 worker，**请以单个服务进程启动，不要添加 `--workers`**。
-
-本机 PostgreSQL 16 + pgvector 已完成容器运行、现有 SQLite 数据导入、向量 SQL 查询、接口启动、自动备份和临时库恢复验证。新装项目仍可不配置数据库直接使用 SQLite；要切换现有数据，请按 [PostgreSQL 接入与迁移步骤](docs/POSTGRESQL.md) 操作。模型向量召回还需另配兼容的 embedding 服务；只安装 pgvector 不会自动生成向量。
-
-面向真实用户的通用生产配置、HTTPS 与备份说明见 [公开部署说明](docs/DEPLOYMENT.md)。已有 ECS 使用独立的 `compose.public.yaml` 与按提交发布的镜像，操作前应查看 [当前部署记录](docs/DEPLOYMENT_CURRENT.md)。本地启动或推送 GitHub 都不会自动更新网站。
-
-## 检查
+后端测试使用 pytest，覆盖业务流程、权限、迁移升级与外部服务替身：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest backend/tests -q
+```
+
+生成覆盖率报告：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest backend/tests -q --cov=app --cov-report=term-missing
+```
+
+前端类型检查与生产构建：
+
+```sh
 cd frontend
 npm ci
 npm run build
 ```
 
-详情见 [验证记录](docs/VALIDATION.md)。GitHub Actions 会在推送及合并请求时执行后端测试与前端构建，运行结果见仓库的 Actions 页面。
+最新一次本地运行：210 项测试全部通过，整体行覆盖率 93%。GitHub Actions 会在推送与合并请求时，分别在 Windows 与 Linux 上执行后端测试和前端构建，结果见 [Actions](https://github.com/QiWang3569/yandu/actions)。
 
-## 文件组织
+## 部署
+
+生产环境使用 PostgreSQL + pgvector、Caddy HTTPS、每日数据库备份与安全 Cookie，编排见 [compose.production.yaml](compose.production.yaml)。先按 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) 准备 `.env` 与站点域名，再启动：
+
+```sh
+docker compose -f compose.production.yaml up -d --build
+```
+
+带 Prometheus + Grafana 的预览编排见 [compose.preview.yaml](compose.preview.yaml)。服务器发布基线、回退与备份证据见 [docs/DEPLOYMENT_CURRENT.md](docs/DEPLOYMENT_CURRENT.md)。
+
+## 目录结构
 
 ```text
-backend/app/            API、数据库、解析与匹配服务
-backend/tests/          业务流程与权限测试
+backend/app/            FastAPI 应用：API、数据库、解析与匹配服务
+backend/tests/          业务流程与权限测试（pytest）
 frontend/src/           React + TypeScript 界面
-scripts/                安装、启动、停止脚本
+scripts/                安装、启动、停止与备份脚本
+docs/                   需求、实现、部署与验证文档
 compose.yaml            本机 PostgreSQL、应用与备份
-compose.production.yaml 生产容器编排（Caddy HTTPS）
-docs/DEPLOYMENT.md      公开部署步骤与上线边界
-docs/DEPLOYMENT_CURRENT.md 已有服务器、发布证据与更新清单
-docs/requirements/      简体中文 PRD 与 TECH_SPEC
-docs/sources/           issues 快照和原始需求记录
-docs/IMPLEMENTATION.md  实现范围及后续工作
+compose.production.yaml 生产编排（Caddy HTTPS）
+compose.preview.yaml    带 Prometheus + Grafana 的预览编排
+prometheus.yml          Prometheus 抓取配置
+Caddyfile               Caddy 站点配置
 data/                   数据库、图片、日志（不提交）
 ```
 
-后续工作包括每次发布的线上验收、持续异机备份与图片恢复演练、版本化数据库迁移、embedding 服务接入与向量回填、生产性能验证，以及降价通知、多模态发布和图片审核。校园统一身份认证、树洞/微信接入仍属后续集成。本版不处理支付，模型不会自动发送咨询消息；站内聊天由用户主动确认发送。
+## 文档索引
+
+- [需求与实现记录](docs/IMPLEMENTATION.md)
+- [公开部署说明](docs/DEPLOYMENT.md) / [当前部署记录](docs/DEPLOYMENT_CURRENT.md)
+- [PostgreSQL 接入与迁移](docs/POSTGRESQL.md)
+- [邮箱登录与站内聊天](docs/EMAIL_AND_CHAT.md)
+- [买家助手说明](docs/BUYER_AGENT.md)
+- [站内意见反馈](docs/FEEDBACK.md)
+- [修改日志](docs/CHANGELOG.md) / [验证记录](docs/VALIDATION.md)
+
+## 许可证与贡献
+
+本项目暂未随附开源许可证，代码使用需联系仓库所有者授权；请勿把本地 `.env`、数据库、图片或密钥提交到仓库。

@@ -1,7 +1,32 @@
 # 修改日志（边改边记录）
 
-> 记录本项目在本地开发调试期间的代码与文档变更，便于回溯。最后更新：2026-10-14。
+> 记录本项目在本地开发调试期间的代码与文档变更，便于回溯。最后更新：2026-10-22。
 > 说明：`software_architecture.html` / `software_architecture_simple.html` 是既有本地文件，不在此次修改范围内。
+
+## 2026-10-21（合并 codex/market-usability-auth）
+
+- 站内意见反馈：新增 `backend/app/feedback.py` 与 `frontend/src/Feedback.tsx`，支持提交问题与截图、我的反馈、管理员回复与状态流转，结果通过站内通知送达；新增 `feedbacks`、`feedback_replies`、`feedback_attachments`、`feedback_notices` 四张表与 `docs/FEEDBACK.md`。
+- 商品发布、编辑与草稿的图片上限由 3 张提升到 9 张，并校验不重复；首页采用更紧凑的布局。
+- 登录会话改为闲置 7 天过期、最长 30 天：新增 `POST /api/v1/auth/refresh` 供前台续期，后台轮询不续期，退出或重置密码撤销会话；登录页面过期后保留已填写表单。
+- 公告已读改为「仅把实际展示的公告标为已读」：`POST /api/v1/announcements/mark-read` 现在接收 `ids` 列表。
+
+## 2026-10-22
+
+- 对话页支持卖家取消已确认的预订：卖家在 `RESERVED` 状态下点击「取消预订」，会话变为已取消、商品恢复在售并重新触发匹配。
+- 修复访客统计：排除爬虫与健康检查请求，对浏览器首次请求去重，匿名访客按 15 分钟滚动窗口计数。
+- 新增商业指标看板与 GMV / 动销率 / 停留时长指标：`frontend/src/AdminMetrics.tsx`；后端新增 `GET /api/v1/admin/analytics/user-growth`、`/visitor-funnel`、`/business-overview` 与 `POST /api/v1/analytics/dwell`，并新增 `PageDwellLog` 表。
+- 商品卡片标签全部展示并自动换行（`frontend/src/App.tsx` / `styles.css`）。
+
+## 2026-10-16
+
+- 指标：新增 `yandu_active_users` 与 `yandu_active_sessions` 自定义业务指标，导出到 `/metrics`。
+
+## 2026-10-15
+
+- 监控与可观测性：接入 `prometheus-fastapi-instrumentator`，新增 `prometheus.yml` 与 `compose.preview.yaml`（Prometheus + Grafana），应用暴露 `/metrics`。
+- 邮件提醒：新注册账号默认开启未读站内信提醒，并一次性开启现有 32 个注册用户；用户可自行关闭，应用重启与重复迁移不覆盖个人选择。
+- 统一商品与求购的搜索栏，移除求购页重复输入框；搜索关键词标签移至「只看在售」之后。
+- 部署：`compose.preview.yaml` 的环境变量与健康检查对齐服务器生产配置。
 
 ## 2026-10-14
 
@@ -147,7 +172,7 @@
 - 公告正文保留换行并放大字号：`frontend/src/styles.css` 给公告与铃铛通知正文加 `white-space: pre-line`，并调大公告/铃铛字号。
 - 演示种子新增「燕渡」上线通知：`backend/app/services.py`。
 
-## 当前改动文件清单
+## 历史改动文件清单（2026-10-07 快照）
 
 | 文件 | 状态 | 说明 |
 | --- | --- | --- |

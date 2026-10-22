@@ -349,3 +349,26 @@ def test_cancel_rechecks_deal_after_another_connection_commits_sale(client, app)
         assert db.get(Item, 'sample-1').status == 'SOLD'
         assert db.get(Conversation, conversation_id).deal_status == 'SOLD'
     assert deal(client, conversation_id, 'confirm')['deal_status'] == 'CONFIRMED'
+
+
+def test_seller_can_cancel_a_reserved_deal_and_reopen_item(client, app):
+    conversation_id = start_conversation(client)
+    deal(client, conversation_id, 'request')
+    login(client, 'seller')
+    deal(client, conversation_id, 'reserve')
+    result = deal(client, conversation_id, 'cancel')
+    assert result['deal_status'] == 'CANCELED'
+    assert result['item_status'] == 'ACTIVE'
+    with app.state.session_factory() as db:
+        assert db.get(Item, 'sample-1').status == 'ACTIVE'
+    # The buyer can request again after the seller cancels the reservation.
+    login(client, 'buyer')
+    assert deal(client, conversation_id, 'request')['deal_status'] == 'REQUESTED'
+
+
+def test_seller_cannot_cancel_before_reserving(client):
+    conversation_id = start_conversation(client)
+    deal(client, conversation_id, 'request')
+    login(client, 'seller')
+    response = client.post(f'/api/v1/conversations/{conversation_id}/deal', json={'action': 'cancel'})
+    assert response.status_code == 403
