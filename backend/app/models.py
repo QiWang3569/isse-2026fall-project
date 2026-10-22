@@ -57,6 +57,8 @@ class LoginSession(Base):
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(ForeignKey('users.id'))
     expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
 class Conversation(Base):

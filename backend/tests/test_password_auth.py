@@ -121,6 +121,7 @@ def test_password_login_reset_and_session_revocation(tmp_path, monkeypatch):
         old_device = TestClient(app)
         old_device.cookies.set('yandu_session', old_token)
         assert old_device.get('/api/v1/auth/me').json()['user'] is None
+        assert old_device.post('/api/v1/auth/refresh').status_code == 401
         client.post('/api/v1/auth/logout')
         assert client.post('/api/v1/auth/password/login', json={
             'email': email, 'password': PASSWORD,

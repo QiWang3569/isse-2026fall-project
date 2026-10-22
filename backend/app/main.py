@@ -27,6 +27,7 @@ from prometheus_client.core import GaugeMetricFamily
 
 from .config import ROOT, Settings
 from .feedback import register_feedback
+from .schemas import AnnouncementReadRequest
 from .chat_email import ChatEmailRunner
 from .database import prepare_database, retire_demo_data
 from .email_auth import code_digest, new_code, normalize_pku_email, send_verification_email
@@ -40,6 +41,10 @@ from .models import ActionLog, Announcement, AnnouncementRead, ChatAttachment, C
 from .password_auth import DUMMY_HASH, hash_password, new_password_error, verify_password
 from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, DwellReport, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, SmartSearchIn, StatusChange, WantedCreate, WantedUpdate
 from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, parse_local, seed
+
+SESSION_IDLE = timedelta(days=7)
+SESSION_MAX_AGE = timedelta(days=30)
+SESSION_RENEW_INTERVAL = timedelta(hours=1)
 
 
 def iso(value):
@@ -332,7 +337,8 @@ def create_app(settings: Settings | None = None):
     def current_user(request: Request, db: Session = Depends(get_db)):
         token = request.cookies.get('yandu_session', '')
         session = db.get(LoginSession, hashlib.sha256(token.encode()).hexdigest()) if token else None
-        if not session or session.expires_at <= now() or (not settings.demo_mode and session.user_id.startswith('demo-')):
+        if (not session or session.expires_at <= now() or session.created_at + SESSION_MAX_AGE <= now()
+                or (not settings.demo_mode and session.user_id.startswith('demo-'))):
             return None
         return db.get(User, session.user_id)
 
@@ -367,10 +373,12 @@ def create_app(settings: Settings | None = None):
         if old and (old_session := db.get(LoginSession, hashlib.sha256(old.encode()).hexdigest())):
             db.delete(old_session)
         token = secrets.token_urlsafe(32)
-        db.add(LoginSession(token_hash=hashlib.sha256(token.encode()).hexdigest(), user_id=user.id, expires_at=now()+timedelta(days=1)))
+        instant = now()
+        db.add(LoginSession(token_hash=hashlib.sha256(token.encode()).hexdigest(), user_id=user.id,
+                            created_at=instant, refreshed_at=instant, expires_at=instant+SESSION_IDLE))
         db.commit()
         response.set_cookie('yandu_session', token, httponly=True, samesite='strict',
-                            secure=settings.session_cookie_secure or request.url.scheme == 'https', max_age=86400)
+                            secure=settings.session_cookie_secure or request.url.scheme == 'https', max_age=int(SESSION_IDLE.total_seconds()))
         return {'user': own_user_out(user)}
 
     def item_out(item, db, user=None):
@@ -452,9 +460,12 @@ def create_app(settings: Settings | None = None):
         return {'count': count or 0}
 
     @app.post('/api/v1/announcements/mark-read')
-    def announcements_mark_read(db: Session = Depends(get_db), user: User = Depends(require_user)):
+    def announcements_mark_read(data: AnnouncementReadRequest, db: Session = Depends(get_db), user: User = Depends(require_user)):
         with mutation_lock:
-            active_ids = db.scalars(select(Announcement.id).where(Announcement.active == True)).all()
+            # Only acknowledge entries actually displayed by the client.
+            db.scalar(select(User).where(User.id == user.id).with_for_update())
+            active_ids = db.scalars(select(Announcement.id).where(
+                Announcement.active == True, Announcement.id.in_(data.ids))).all()
             existing = set(db.scalars(select(AnnouncementRead.announcement_id)
                                       .where(AnnouncementRead.user_id == user.id)).all())
             for announcement_id in active_ids:
@@ -466,6 +477,30 @@ def create_app(settings: Settings | None = None):
     @app.get('/api/v1/auth/me')
     def me(user=Depends(current_user)):
         return {'user': own_user_out(user)}
+
+    @app.post('/api/v1/auth/refresh')
+    def refresh_session(request: Request, response: Response, db: Session = Depends(get_db)):
+        token = request.cookies.get('yandu_session', '')
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        with mutation_lock:
+            row = db.scalar(select(LoginSession).where(LoginSession.token_hash == digest).with_for_update())
+            instant = now()
+            if (not row or row.expires_at <= instant or row.created_at + SESSION_MAX_AGE <= instant
+                    or (not settings.demo_mode and row.user_id.startswith('demo-'))):
+                raise HTTPException(401, '登录已过期，请重新登录。已填写的内容会保留。')
+            user = db.get(User, row.user_id)
+            if not user:
+                raise HTTPException(401, '请重新登录')
+            if row.refreshed_at <= instant - SESSION_RENEW_INTERVAL:
+                row.expires_at = min(instant + SESSION_IDLE, row.created_at + SESSION_MAX_AGE)
+                row.refreshed_at = instant
+                db.commit()
+            # Reissue the same opaque token so concurrent tabs cannot invalidate
+            # one another. A logout/deletion can never be undone by this UPDATE.
+            response.set_cookie('yandu_session', token, httponly=True, samesite='strict',
+                                secure=settings.session_cookie_secure or request.url.scheme == 'https',
+                                max_age=max(1, int((row.expires_at - instant).total_seconds())))
+            return {'user': own_user_out(user)}
 
     @app.patch('/api/v1/users/me')
     def update_profile(data: ProfileUpdate, user: User = Depends(require_user), db: Session = Depends(get_db)):
@@ -645,10 +680,11 @@ def create_app(settings: Settings | None = None):
     @app.post('/api/v1/auth/logout')
     def logout(request: Request, response: Response, db: Session = Depends(get_db)):
         token = request.cookies.get('yandu_session', '')
-        row = db.get(LoginSession, hashlib.sha256(token.encode()).hexdigest())
-        if row:
-            db.delete(row)
-            db.commit()
+        with mutation_lock:
+            row = db.get(LoginSession, hashlib.sha256(token.encode()).hexdigest())
+            if row:
+                db.delete(row)
+                db.commit()
         response.delete_cookie('yandu_session')
         return {'ok': True}
 
