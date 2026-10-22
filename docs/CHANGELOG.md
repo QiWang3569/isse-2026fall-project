@@ -3,6 +3,13 @@
 > 记录本项目在本地开发调试期间的代码与文档变更，便于回溯。最后更新：2026-10-22。
 > 说明：`software_architecture.html` / `software_architecture_simple.html` 是既有本地文件，不在此次修改范围内。
 
+## 2026-10-21（合并 codex/market-usability-auth）
+
+- 站内意见反馈：新增 `backend/app/feedback.py` 与 `frontend/src/Feedback.tsx`，支持提交问题与截图、我的反馈、管理员回复与状态流转，结果通过站内通知送达；新增 `feedbacks`、`feedback_replies`、`feedback_attachments`、`feedback_notices` 四张表与 `docs/FEEDBACK.md`。
+- 商品发布、编辑与草稿的图片上限由 3 张提升到 9 张，并校验不重复；首页采用更紧凑的布局。
+- 登录会话改为闲置 7 天过期、最长 30 天：新增 `POST /api/v1/auth/refresh` 供前台续期，后台轮询不续期，退出或重置密码撤销会话；登录页面过期后保留已填写表单。
+- 公告已读改为「仅把实际展示的公告标为已读」：`POST /api/v1/announcements/mark-read` 现在接收 `ids` 列表。
+
 ## 2026-10-22
 
 - 修复访客统计：排除爬虫与健康检查请求，对浏览器首次请求去重，匿名访客按 15 分钟滚动窗口计数。
