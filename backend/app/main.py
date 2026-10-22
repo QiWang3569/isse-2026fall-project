@@ -54,20 +54,27 @@ def term_matches(term: str, text: str) -> bool:
 
 
 class VisitorTracker:
-    def __init__(self):
+    def __init__(self, window_seconds: int = 900):
         self._lock = threading.Lock()
         self._anon_vids = {}
+        self.window_seconds = window_seconds
 
     def touch(self, vid: str):
         now_ts = time.time()
         with self._lock:
             self._anon_vids[vid] = now_ts
-            cutoff = now_ts - 3600
+            cutoff = now_ts - self.window_seconds
             self._anon_vids = {v: t for v, t in self._anon_vids.items() if t >= cutoff}
+
+    def remove(self, vid: str):
+        if not vid:
+            return
+        with self._lock:
+            self._anon_vids.pop(vid, None)
 
     def get_rolling_uv(self) -> int:
         now_ts = time.time()
-        cutoff = now_ts - 3600
+        cutoff = now_ts - self.window_seconds
         with self._lock:
             self._anon_vids = {v: t for v, t in self._anon_vids.items() if t >= cutoff}
             return len(self._anon_vids)
@@ -282,26 +289,37 @@ def create_app(settings: Settings | None = None):
 
     @app.middleware('http')
     async def visitor_tracking_middleware(request: Request, call_next):
+        path = request.url.path
+        if path in ('/api/v1/health', '/metrics'):
+            return await call_next(request)
+
         token = request.cookies.get('yandu_session')
         vid = request.cookies.get('yandu_vid')
+        ua = (request.headers.get('user-agent') or '').lower()
+        is_bot = any(k in ua for k in ('prometheus', 'python-urllib', 'curl/', 'wget/', 'bot', 'spider', 'crawler', 'headless'))
+
         new_vid = None
         if not vid:
-            new_vid = secrets.token_hex(16)
+            forwarded = request.headers.get('x-forwarded-for', '')
+            client_ip = forwarded.split(',')[0].strip() if forwarded else (request.client.host if request.client else 'unknown')
+            new_vid = hashlib.sha256(f'{client_ip}|{ua}'.encode()).hexdigest()[:32]
             vid = new_vid
         request.state.vid = vid
 
-        if not token:
+        if token:
+            visitor_tracker.remove(vid)
+        elif not is_bot and path.startswith('/api/v1/'):
             visitor_tracker.touch(vid)
 
         response = await call_next(request)
 
-        if new_vid:
+        if new_vid and not is_bot:
             response.set_cookie('yandu_vid', new_vid, max_age=86400 * 90, httponly=True, samesite='lax')
 
-        if not token and request.method == 'GET' and (request.url.path.startswith('/api/v1/items') or request.url.path.startswith('/api/v1/wanted')):
+        if not token and not is_bot and request.method == 'GET' and (path.startswith('/api/v1/items') or path.startswith('/api/v1/wanted')):
             record_visitor_event(vid, 'BROWSE')
 
-        if response.status_code == 401:
+        if not is_bot and response.status_code == 401:
             record_visitor_event(vid, 'HIT_LOGIN_PROMPT')
 
         return response

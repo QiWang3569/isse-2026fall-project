@@ -89,10 +89,35 @@ def test_dwell_time_tracking_and_advanced_metrics(client):
     assert res.status_code == 200
     assert res.json() == {'ok': True}
 
-    # 2. Check Prometheus metrics for new gauges
+    # 2.check Prometheus metrics for new gauges
     metrics_res = client.get('/metrics')
     assert metrics_res.status_code == 200
     body = metrics_res.text
     assert 'yandu_first_inquiry_rate_72h_pct' in body
     assert 'yandu_zombie_listing_rate_pct' in body
     assert 'yandu_page_dwell_seconds_total' in body
+
+
+def test_visitor_deduplication_and_healthcheck_exclusion(client):
+    from app.main import visitor_tracker
+    visitor_tracker._anon_vids.clear()
+
+    # 1. Healthchecks and metrics scrapes without cookies must NOT inflate visitor count
+    for _ in range(10):
+        client.cookies.clear()
+        assert client.get('/api/v1/health').status_code == 200
+        assert client.get('/metrics').status_code == 200
+    assert visitor_tracker.get_rolling_uv() == 0
+
+    # 2. Multiple parallel requests before cookie is saved from same IP+UA only count as 1 visitor
+    for route in ('/api/v1/items/', '/api/v1/wanted/', '/api/v1/announcements'):
+        client.cookies.clear()
+        client.get(route)
+    assert visitor_tracker.get_rolling_uv() == 1
+
+    # 3. Once logged in, the same browser is removed from anonymous visitor count
+    login(client, 'admin')
+    res = client.get('/api/v1/admin/analytics/business-overview')
+    assert res.status_code == 200
+    assert res.json()['realtime']['rolling_anon_uv'] == 0
+
