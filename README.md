@@ -193,7 +193,7 @@ npm ci
 npm run build
 ```
 
-最新一次本地运行：210 项测试全部通过，整体行覆盖率 93%。GitHub Actions 会在推送与合并请求时，分别在 Windows 与 Linux 上执行后端测试和前端构建，结果见 [Actions](https://github.com/QiWang3569/yandu/actions)。
+最新一次本地运行：217 项测试全部通过；此前 210 项测试对应的整体行覆盖率为 93%，本次未重新测量覆盖率。GitHub Actions 会在推送与合并请求时，分别在 Windows 与 Linux 上执行后端测试和前端构建，结果见 [Actions](https://github.com/QiWang3569/yandu/actions)。
 
 ## 部署
 
@@ -229,6 +229,8 @@ data/                   数据库、图片、日志（不提交）
 - [邮箱登录与站内聊天](docs/EMAIL_AND_CHAT.md)
 - [买家助手说明](docs/BUYER_AGENT.md)
 - [站内意见反馈](docs/FEEDBACK.md)
+- [通知已读与商品图片查看](docs/NOTIFICATIONS_AND_GALLERY.md)
+- [识图辅助发布方案（调研）](docs/VISION_ASSISTED_PUBLISHING.md)
 - [修改日志](docs/CHANGELOG.md) / [验证记录](docs/VALIDATION.md)
 
 ## 许可证与贡献
