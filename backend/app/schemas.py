@@ -274,3 +274,9 @@ class ParsedItem(StrictModel):
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
     condition_valid = field_validator('condition_grade')(classmethod(lambda cls, v: ItemCreate.condition_valid(v) if v else None))
     tags_valid = field_validator('tags')(classmethod(lambda cls, v: ItemCreate.tags_valid(v)))
+
+
+class DwellReport(StrictModel):
+    page: str = Field(min_length=1, max_length=64)
+    item_id: str | None = None
+    duration_seconds: int = Field(ge=1, le=86400)
