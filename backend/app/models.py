@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, true
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func, true
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -30,6 +30,7 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     bio: Mapped[str] = mapped_column(String(160), default='')
     avatar_color: Mapped[str] = mapped_column(String(20), default='sage')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, server_default=func.now())
 
 
 class EmailChallenge(Base):
@@ -320,3 +321,23 @@ class FeedbackNotice(Base):
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     __table_args__ = (Index('idx_feedback_notice_user', 'user_id', 'is_read', 'created_at'),)
+
+class VisitorEvent(Base):
+    __tablename__ = 'visitor_events'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    vid: Mapped[str] = mapped_column(String(32), index=True)
+    event_type: Mapped[str] = mapped_column(String(30))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, server_default=func.now())
+    __table_args__ = (Index('idx_visitor_event', 'event_type', 'created_at'),)
+
+
+class PageDwellLog(Base):
+    __tablename__ = 'page_dwell_logs'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    vid: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str | None] = mapped_column(ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    page: Mapped[str] = mapped_column(String(64), index=True)
+    item_id: Mapped[str | None] = mapped_column(ForeignKey('items.id', ondelete='CASCADE'), nullable=True, index=True)
+    duration_seconds: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, server_default=func.now())
+    __table_args__ = (Index('idx_dwell_page_created', 'page', 'created_at'),)

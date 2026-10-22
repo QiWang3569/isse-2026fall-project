@@ -7,6 +7,7 @@ import re
 import secrets
 import smtplib
 import threading
+import time
 import warnings
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -36,9 +37,9 @@ from .item_lifecycle import (PUBLIC_ITEM_STATES, can_manage, change_conversation
 from .search import keyword_filters
 from .retention import prune_chat
 from .needs import apply_wanted, backfill_wanted, sync_wanted, wanted_query
-from .models import ActionLog, Announcement, AnnouncementRead, ChatAttachment, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, Wanted, now, uid
+from .models import ActionLog, Announcement, AnnouncementRead, ChatAttachment, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PageDwellLog, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, VisitorEvent, Wanted, now, uid
 from .password_auth import DUMMY_HASH, hash_password, new_password_error, verify_password
-from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, SmartSearchIn, StatusChange, WantedCreate, WantedUpdate
+from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, DwellReport, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, SmartSearchIn, StatusChange, WantedCreate, WantedUpdate
 from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, parse_local, seed
 
 SESSION_IDLE = timedelta(days=7)
@@ -58,26 +59,130 @@ def term_matches(term: str, text: str) -> bool:
     return needle in normalize(text)
 
 
+class VisitorTracker:
+    def __init__(self, window_seconds: int = 900):
+        self._lock = threading.Lock()
+        self._anon_vids = {}
+        self.window_seconds = window_seconds
+
+    def touch(self, vid: str):
+        now_ts = time.time()
+        with self._lock:
+            self._anon_vids[vid] = now_ts
+            cutoff = now_ts - self.window_seconds
+            self._anon_vids = {v: t for v, t in self._anon_vids.items() if t >= cutoff}
+
+    def remove(self, vid: str):
+        if not vid:
+            return
+        with self._lock:
+            self._anon_vids.pop(vid, None)
+
+    def get_rolling_uv(self) -> int:
+        now_ts = time.time()
+        cutoff = now_ts - self.window_seconds
+        with self._lock:
+            self._anon_vids = {v: t for v, t in self._anon_vids.items() if t >= cutoff}
+            return len(self._anon_vids)
+
+
+visitor_tracker = VisitorTracker()
+
+
 class ActiveUsersCollector:
     _is_yandu_collector = True
 
-    def __init__(self, session_factory):
+    def __init__(self, session_factory, tracker: VisitorTracker | None = None):
         self.session_factory = session_factory
+        self.tracker = tracker or visitor_tracker
 
     def collect(self):
         gauge_users = GaugeMetricFamily('yandu_active_users', 'Current number of active logged-in users', labels=[])
         gauge_sessions = GaugeMetricFamily('yandu_active_sessions', 'Current number of active login sessions', labels=[])
+        gauge_total_users = GaugeMetricFamily('yandu_total_registered_users', 'Total registered users in DB', labels=['campus'])
+        gauge_registrations = GaugeMetricFamily('yandu_user_registrations_total', 'Total user registrations in DB', labels=['campus'])
+        gauge_funnel = GaugeMetricFamily('yandu_visitor_funnel_events_total', 'Visitor progression events total', labels=['stage'])
+        gauge_anon_uv = GaugeMetricFamily('yandu_anonymous_uv_rolling_1h', 'Estimated unique anonymous visitors in the last 1 hour', labels=[])
+        gauge_first_inquiry = GaugeMetricFamily('yandu_first_inquiry_rate_72h_pct', 'Percentage of recent items receiving inquiry in 72h', labels=[])
+        gauge_zombie = GaugeMetricFamily('yandu_zombie_listing_rate_pct', 'Percentage of active items >14d with 0 inquiries', labels=[])
+        gauge_dwell = GaugeMetricFamily('yandu_page_dwell_seconds_total', 'Total dwell time in seconds per page', labels=['page'])
+        gauge_gmv = GaugeMetricFamily('yandu_total_gmv_yuan', 'Total GMV in RMB for sold items', labels=[])
+
+        first_inquiry_pct = 0.0
+        zombie_pct = 0.0
+        total_gmv_yuan = 0.0
+        dwell_totals = []
+
         try:
             with self.session_factory() as db:
                 users_count = db.query(func.count(distinct(LoginSession.user_id))).filter(LoginSession.expires_at > now()).scalar() or 0
                 sessions_count = db.query(func.count(LoginSession.token_hash)).filter(LoginSession.expires_at > now()).scalar() or 0
+
+                campus_rows = db.query(User.campus, func.count(User.id)).group_by(User.campus).all()
+                for campus, count in campus_rows:
+                    gauge_total_users.add_metric([campus or 'unknown'], float(count))
+                    gauge_registrations.add_metric([campus or 'unknown'], float(count))
+
+                funnel_rows = db.query(VisitorEvent.event_type, func.count(VisitorEvent.id)).group_by(VisitorEvent.event_type).all()
+                funnel_counts = {r[0]: r[1] for r in funnel_rows}
+                stage_map = [
+                    ('browse', 'BROWSE'),
+                    ('auth_prompt_hit', 'HIT_LOGIN_PROMPT'),
+                    ('send_code', 'SEND_CODE'),
+                    ('registered', 'REGISTERED')
+                ]
+                for stage_label, event_name in stage_map:
+                    gauge_funnel.add_metric([stage_label], float(funnel_counts.get(event_name, 0)))
+
+                # GMV total
+                gmv_cents = db.scalar(select(func.sum(Item.price_cents)).where(Item.status == 'SOLD')) or 0
+                total_gmv_yuan = round(gmv_cents / 100, 2)
+
+                # 72h first inquiry rate
+                thirty_d = now() - timedelta(days=30)
+                recent_items = db.scalars(select(Item).where(Item.created_at >= thirty_d)).all()
+                if recent_items:
+                    conv_items = set(db.scalars(
+                        select(Conversation.item_id)
+                        .where(Conversation.created_at <= Item.created_at + timedelta(hours=72))
+                        .join(Item, Item.id == Conversation.item_id)
+                        .where(Item.created_at >= thirty_d)
+                    ).all())
+                    first_inquiry_pct = round(len(conv_items) / len(recent_items) * 100, 1)
+
+                # Zombie inventory rate (>14d active with 0 convs)
+                fourteen_d = now() - timedelta(days=14)
+                older_items = db.scalars(select(Item.id).where(Item.status == 'ACTIVE', Item.created_at <= fourteen_d)).all()
+                if older_items:
+                    conv_ids = set(db.scalars(select(distinct(Conversation.item_id)).where(Conversation.item_id.in_(older_items))).all())
+                    zombie_pct = round((len(older_items) - len(conv_ids)) / len(older_items) * 100, 1)
+
+                # Page dwell totals
+                dwell_totals = db.execute(select(PageDwellLog.page, func.sum(PageDwellLog.duration_seconds)).group_by(PageDwellLog.page)).all()
+
         except Exception:
             users_count = 0
             sessions_count = 0
+
         gauge_users.add_metric([], float(users_count))
         gauge_sessions.add_metric([], float(sessions_count))
+        gauge_anon_uv.add_metric([], float(self.tracker.get_rolling_uv()))
+        gauge_first_inquiry.add_metric([], float(first_inquiry_pct))
+        gauge_zombie.add_metric([], float(zombie_pct))
+        gauge_gmv.add_metric([], float(total_gmv_yuan))
+        for pg, sec in dwell_totals:
+            gauge_dwell.add_metric([pg or 'unknown'], float(sec or 0))
+
         yield gauge_users
         yield gauge_sessions
+        yield gauge_total_users
+        yield gauge_registrations
+        yield gauge_funnel
+        yield gauge_anon_uv
+        yield gauge_first_inquiry
+        yield gauge_zombie
+        yield gauge_gmv
+        yield gauge_dwell
 
 
 def create_app(settings: Settings | None = None):
@@ -160,6 +265,69 @@ def create_app(settings: Settings | None = None):
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
         if request.url.path.startswith('/api/'):
             response.headers['Cache-Control'] = 'no-store'
+        return response
+
+    def record_visitor_event(vid: str | None, event_type: str, session: Session | None = None):
+        if not vid:
+            return
+        def _execute(db_session):
+            if event_type == 'BROWSE':
+                one_hour_ago = now() - timedelta(hours=1)
+                existing = db_session.scalar(
+                    select(VisitorEvent.id)
+                    .where(VisitorEvent.vid == vid, VisitorEvent.event_type == 'BROWSE', VisitorEvent.created_at >= one_hour_ago)
+                    .limit(1)
+                )
+                if existing:
+                    return
+            db_session.add(VisitorEvent(vid=vid, event_type=event_type))
+            if session is None:
+                db_session.commit()
+
+        try:
+            if session is not None:
+                _execute(session)
+            else:
+                with factory() as db:
+                    _execute(db)
+        except Exception as exc:
+            logging.getLogger('yandu').warning(f'Failed to record visitor event: {exc}')
+
+    @app.middleware('http')
+    async def visitor_tracking_middleware(request: Request, call_next):
+        path = request.url.path
+        if path in ('/api/v1/health', '/metrics'):
+            return await call_next(request)
+
+        token = request.cookies.get('yandu_session')
+        vid = request.cookies.get('yandu_vid')
+        ua = (request.headers.get('user-agent') or '').lower()
+        is_bot = any(k in ua for k in ('prometheus', 'python-urllib', 'curl/', 'wget/', 'bot', 'spider', 'crawler', 'headless'))
+
+        new_vid = None
+        if not vid:
+            forwarded = request.headers.get('x-forwarded-for', '')
+            client_ip = forwarded.split(',')[0].strip() if forwarded else (request.client.host if request.client else 'unknown')
+            new_vid = hashlib.sha256(f'{client_ip}|{ua}'.encode()).hexdigest()[:32]
+            vid = new_vid
+        request.state.vid = vid
+
+        if token:
+            visitor_tracker.remove(vid)
+        elif not is_bot and path.startswith('/api/v1/'):
+            visitor_tracker.touch(vid)
+
+        response = await call_next(request)
+
+        if new_vid and not is_bot:
+            response.set_cookie('yandu_vid', new_vid, max_age=86400 * 90, httponly=True, samesite='lax')
+
+        if not token and not is_bot and request.method == 'GET' and (path.startswith('/api/v1/items') or path.startswith('/api/v1/wanted')):
+            record_visitor_event(vid, 'BROWSE')
+
+        if not is_bot and response.status_code == 401:
+            record_visitor_event(vid, 'HIT_LOGIN_PROMPT')
+
         return response
 
     def get_db():
@@ -358,7 +526,7 @@ def create_app(settings: Settings | None = None):
         }
 
     @app.post('/api/v1/auth/email/request-code')
-    def request_email_code(data: EmailCodeRequest, db: Session = Depends(get_db)):
+    def request_email_code(data: EmailCodeRequest, request: Request, db: Session = Depends(get_db)):
         email = normalize_pku_email(data.email)
         if not email:
             raise HTTPException(422, '仅支持 @pku.edu.cn 或 @stu.pku.edu.cn 邮箱')
@@ -393,6 +561,8 @@ def create_app(settings: Settings | None = None):
                                       expires_at=instant+timedelta(minutes=10), sent_at=instant,
                                       window_started_at=instant, sends_in_window=1, attempts=0))
             db.commit()
+            record_visitor_event(getattr(request.state, 'vid', None), 'SEND_CODE', db)
+            db.commit()
         return {'ok': True, 'message': '验证码已发送，请检查邮箱'}
 
     @app.post('/api/v1/auth/email/verify')
@@ -420,6 +590,7 @@ def create_app(settings: Settings | None = None):
                             password_hash=hash_password(password))
                 db.add(user)
                 db.flush()
+                record_visitor_event(getattr(request.state, 'vid', None), 'REGISTERED', db)
             db.delete(challenge)
             return begin_session(request, response, db, user)
 
@@ -1605,6 +1776,364 @@ def create_app(settings: Settings | None = None):
         return {'ok': True}
 
     register_feedback(app, get_db, require_user, require_admin, settings, mutation_lock, save_image)
+
+    @app.get('/api/v1/admin/analytics/user-growth')
+    def admin_user_growth(days: int = 30, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+        since = now() - timedelta(days=days)
+        daily_stats = db.execute(
+            select(
+                func.date(User.created_at).label('date'),
+                func.count(User.id).label('new_users')
+            )
+            .where(User.created_at >= since)
+            .group_by(func.date(User.created_at))
+            .order_by('date')
+        ).all()
+
+        base_count = db.scalar(select(func.count(User.id)).where(User.created_at < since)) or 0
+        total_users = db.scalar(select(func.count(User.id))) or 0
+        cumulative = base_count
+        trend = []
+        for r in daily_stats:
+            cumulative += r.new_users
+            trend.append({
+                'date': str(r.date),
+                'new_users': r.new_users,
+                'cumulative_users': cumulative
+            })
+        return {
+            'total_users': total_users,
+            'base_count': base_count,
+            'trend': trend
+        }
+
+    @app.get('/api/v1/admin/analytics/visitor-funnel')
+    def admin_visitor_funnel(days: int = 7, db: Session = Depends(get_db), user: User = Depends(require_admin)):
+        since = now() - timedelta(days=days)
+        total_visitors = db.scalar(
+            select(func.count(distinct(VisitorEvent.vid)))
+            .where(VisitorEvent.created_at >= since)
+        ) or 0
+
+        blocked_visitors = db.scalar(
+            select(func.count(distinct(VisitorEvent.vid)))
+            .where(VisitorEvent.event_type == 'HIT_LOGIN_PROMPT', VisitorEvent.created_at >= since)
+        ) or 0
+
+        sent_code_visitors = db.scalar(
+            select(func.count(distinct(VisitorEvent.vid)))
+            .where(VisitorEvent.event_type == 'SEND_CODE', VisitorEvent.created_at >= since)
+        ) or 0
+
+        registered_visitors = db.scalar(
+            select(func.count(distinct(VisitorEvent.vid)))
+            .where(VisitorEvent.event_type == 'REGISTERED', VisitorEvent.created_at >= since)
+        ) or 0
+
+        unregistered_browsers = max(0, total_visitors - registered_visitors)
+        drop_off_pct = round((blocked_visitors - registered_visitors) / (blocked_visitors or 1) * 100, 1) if blocked_visitors else 0.0
+
+        return {
+            'total_unique_visitors': total_visitors,
+            'unregistered_browsers': unregistered_browsers,
+            'funnel': [
+                {'stage': '纯浏览商品访客 (Browse)', 'count': total_visitors, 'pct': 100.0},
+                {'stage': '触发登录拦截 (Hit 401)', 'count': blocked_visitors, 'pct': round(blocked_visitors / (total_visitors or 1) * 100, 1)},
+                {'stage': '输入邮箱索取验证码 (Send Code)', 'count': sent_code_visitors, 'pct': round(sent_code_visitors / (total_visitors or 1) * 100, 1)},
+                {'stage': '最终注册成功 (Registered)', 'count': registered_visitors, 'pct': round(registered_visitors / (total_visitors or 1) * 100, 1)}
+            ],
+            'friction_drop_off_pct': drop_off_pct
+        }
+
+    @app.post('/api/v1/analytics/dwell')
+    def record_dwell_time(data: DwellReport, request: Request, db: Session = Depends(get_db)):
+        vid = request.cookies.get('yandu_vid') or request.headers.get('x-visitor-id') or uid()[:32]
+        user_id = None
+        auth = request.headers.get('authorization')
+        if auth and auth.startswith('Bearer '):
+            token = auth.split(' ', 1)[1]
+            token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+            session_obj = db.scalar(select(LoginSession).where(LoginSession.token_hash == token_hash, LoginSession.expires_at > now()))
+            if session_obj:
+                user_id = session_obj.user_id
+
+        target_item_id = data.item_id
+        if target_item_id:
+            exists = db.scalar(select(Item.id).where(Item.id == target_item_id))
+            if not exists:
+                target_item_id = None
+
+        log_entry = PageDwellLog(
+            vid=vid,
+            user_id=user_id,
+            page=data.page,
+            item_id=target_item_id,
+            duration_seconds=data.duration_seconds
+        )
+        db.add(log_entry)
+        db.commit()
+        return {'ok': True}
+
+    @app.get('/api/v1/admin/analytics/business-overview')
+    def admin_business_overview(db: Session = Depends(get_db), user: User = Depends(require_admin)):
+        active_users = db.query(func.count(distinct(LoginSession.user_id))).filter(LoginSession.expires_at > now()).scalar() or 0
+        active_sessions = db.query(func.count(LoginSession.token_hash)).filter(LoginSession.expires_at > now()).scalar() or 0
+        rolling_anon_uv = visitor_tracker.get_rolling_uv()
+
+        total_items = db.scalar(select(func.count(Item.id))) or 0
+        sold_items = db.scalar(select(func.count(Item.id)).where(Item.status == 'SOLD')) or 0
+        active_items = db.scalar(select(func.count(Item.id)).where(Item.status == 'ACTIVE')) or 0
+        active_demands = (db.scalar(select(func.count(Intent.id)).where(Intent.status == 'ACTIVE')) or 0) + \
+                         (db.scalar(select(func.count(Wanted.id)).where(Wanted.status == 'ACTIVE')) or 0)
+
+        sell_through_rate = round(sold_items / (total_items or 1) * 100, 1)
+        supply_demand_ratio = round(active_items / (active_demands or 1), 2)
+
+        total_gmv_cents = db.scalar(select(func.sum(Item.price_cents)).where(Item.status == 'SOLD')) or 0
+        total_gmv_yuan = round(total_gmv_cents / 100, 2)
+        avg_order_value_yuan = round((total_gmv_cents / (sold_items or 1)) / 100, 2) if sold_items else 0.0
+
+        thirty_days_ago = now() - timedelta(days=30)
+        recent_30d_gmv_cents = db.scalar(
+            select(func.sum(Item.price_cents))
+            .where(Item.status == 'SOLD', Item.created_at >= thirty_days_ago)
+        ) or 0
+        recent_30d_gmv_yuan = round(recent_30d_gmv_cents / 100, 2)
+
+        cat_stats = db.execute(
+            select(
+                Item.category,
+                func.count(Item.id).label('total'),
+                func.count(case((Item.status == 'SOLD', 1))).label('sold'),
+                func.sum(case((Item.status == 'SOLD', Item.price_cents), else_=0)).label('gmv_cents')
+            )
+            .group_by(Item.category)
+            .order_by(func.count(Item.id).desc())
+        ).all()
+        categories = [
+            {
+                'category': r.category or '未分类',
+                'total': r.total,
+                'sold': r.sold,
+                'rate_pct': round(r.sold / (r.total or 1) * 100, 1),
+                'gmv_yuan': round((r.gmv_cents or 0) / 100, 2)
+            }
+            for r in cat_stats
+        ]
+
+        sold_convs = db.execute(
+            select(Item.created_at, Conversation.last_message_at)
+            .join(Conversation, Conversation.item_id == Item.id)
+            .where(Item.status == 'SOLD', Conversation.deal_status.in_(['SOLD', 'CONFIRMED']))
+        ).all()
+        if sold_convs:
+            diffs = [(c_end - i_start).total_seconds() for i_start, c_end in sold_convs if c_end >= i_start]
+            avg_days = round((sum(diffs) / len(diffs)) / 86400, 1) if diffs else 1.5
+        else:
+            avg_days = 2.0
+
+        # 1. 72h 初次咨询率 (72h First Inquiry Rate) & 平均初次咨询用时
+        thirty_days_ago = now() - timedelta(days=30)
+        recent_items = db.scalars(select(Item).where(Item.created_at >= thirty_days_ago)).all()
+        recent_items_count = len(recent_items)
+        if recent_items_count > 0:
+            first_conv_rows = db.execute(
+                select(Conversation.item_id, func.min(Conversation.created_at).label('first_conv_at'))
+                .join(Item, Item.id == Conversation.item_id)
+                .where(Item.created_at >= thirty_days_ago)
+                .group_by(Conversation.item_id)
+            ).all()
+            first_conv_map = {r.item_id: r.first_conv_at for r in first_conv_rows}
+            inquired_72h_count = 0
+            hours_list = []
+            for it in recent_items:
+                fc_at = first_conv_map.get(it.id)
+                if fc_at:
+                    diff_hours = (fc_at - it.created_at).total_seconds() / 3600.0
+                    if 0 <= diff_hours <= 72.0:
+                        inquired_72h_count += 1
+                    if diff_hours >= 0:
+                        hours_list.append(diff_hours)
+            inquiry_rate_72h = round(inquired_72h_count / recent_items_count * 100, 1)
+            avg_hours_to_inquiry = round(sum(hours_list) / len(hours_list), 1) if hours_list else 0.0
+        else:
+            inquiry_rate_72h = 0.0
+            avg_hours_to_inquiry = 0.0
+
+        # 2. 死库存率 (Zombie Inventory Rate: active > 14 days with 0 conversations)
+        fourteen_days_ago = now() - timedelta(days=14)
+        older_active_items = db.scalars(
+            select(Item).where(Item.status == 'ACTIVE', Item.created_at <= fourteen_days_ago)
+        ).all()
+        older_active_count = len(older_active_items)
+        if older_active_count > 0:
+            older_ids = [it.id for it in older_active_items]
+            conv_item_ids = set(
+                db.scalars(
+                    select(distinct(Conversation.item_id)).where(Conversation.item_id.in_(older_ids))
+                ).all()
+            )
+            zombie_items = [it for it in older_active_items if it.id not in conv_item_ids]
+            zombie_count = len(zombie_items)
+            zombie_rate = round(zombie_count / older_active_count * 100, 1)
+            top_zombies = [
+                {
+                    'id': z.id,
+                    'title': z.title,
+                    'price_cents': z.price_cents,
+                    'category': z.category or '未分类',
+                    'days_listed': max(14, int((now() - z.created_at).total_seconds() / 86400))
+                }
+                for z in zombie_items[:5]
+            ]
+        else:
+            zombie_count = 0
+            zombie_rate = 0.0
+            top_zombies = []
+
+        # 3. 核心品类 7 天动销率 (7-day Category STR)
+        seven_days_ago = now() - timedelta(days=7)
+        cat_7d_stats = db.execute(
+            select(
+                Item.category,
+                func.count(Item.id).label('total_7d'),
+                func.count(case((Item.status == 'SOLD', 1))).label('sold_7d')
+            )
+            .where(Item.created_at >= seven_days_ago)
+            .group_by(Item.category)
+        ).all()
+        cat_7d_map = {r.category or '未分类': (r.total_7d, r.sold_7d) for r in cat_7d_stats}
+        for c in categories:
+            t7, s7 = cat_7d_map.get(c['category'], (0, 0))
+            c['total_7d'] = t7
+            c['sold_7d'] = s7
+            c['rate_7d_pct'] = round(s7 / (t7 or 1) * 100, 1) if t7 else 0.0
+
+        # 4. 页面停留时长与商品微观洞察 (Dwell Distribution & Hesitation Matrix)
+        page_dwell_rows = db.execute(
+            select(
+                PageDwellLog.page,
+                func.count(PageDwellLog.id).label('views'),
+                func.avg(PageDwellLog.duration_seconds).label('avg_seconds'),
+                func.sum(PageDwellLog.duration_seconds).label('total_seconds')
+            )
+            .group_by(PageDwellLog.page)
+            .order_by(func.avg(PageDwellLog.duration_seconds).desc())
+        ).all()
+        page_dwell_distribution = [
+            {
+                'page': r.page,
+                'views': r.views,
+                'avg_seconds': round(float(r.avg_seconds or 0), 1),
+                'total_seconds': int(r.total_seconds or 0)
+            }
+            for r in page_dwell_rows
+        ]
+
+        hesitation_rows = db.execute(
+            select(
+                Item.id,
+                Item.title,
+                Item.price_cents,
+                Item.category,
+                func.sum(PageDwellLog.duration_seconds).label('total_dwell'),
+                func.count(PageDwellLog.id).label('view_count'),
+                func.avg(PageDwellLog.duration_seconds).label('avg_dwell')
+            )
+            .join(PageDwellLog, PageDwellLog.item_id == Item.id)
+            .where(Item.status == 'ACTIVE')
+            .group_by(Item.id, Item.title, Item.price_cents, Item.category)
+            .order_by(func.sum(PageDwellLog.duration_seconds).desc())
+            .limit(10)
+        ).all()
+
+        hesitation_items = []
+        for hr in hesitation_rows:
+            conv_count = db.scalar(select(func.count(Conversation.id)).where(Conversation.item_id == hr.id)) or 0
+            if conv_count == 0:
+                hesitation_items.append({
+                    'id': hr.id,
+                    'title': hr.title,
+                    'price_cents': hr.price_cents,
+                    'category': hr.category or '未分类',
+                    'total_dwell_seconds': int(hr.total_dwell or 0),
+                    'avg_dwell_seconds': round(float(hr.avg_dwell or 0), 1),
+                    'view_count': hr.view_count,
+                    'diagnosis': '买家停留较久但未发起私聊，建议引导卖家降价或补全细节'
+                })
+
+        total_notifications = db.scalar(select(func.count(Notification.id))) or 0
+        chat_conversions = db.scalar(
+            select(func.count(distinct(Notification.id)))
+            .select_from(Notification)
+            .join(Conversation, (Conversation.item_id == Notification.item_id) & (Conversation.buyer_id == Notification.buyer_id))
+        ) or 0
+        push_to_chat_cvr = round(chat_conversions / (total_notifications or 1) * 100, 1)
+
+        attributed_deals = db.scalar(
+            select(func.count(distinct(Item.id)))
+            .select_from(Item)
+            .join(Notification, Notification.item_id == Item.id)
+            .join(Conversation, (Conversation.item_id == Item.id) & (Conversation.buyer_id == Notification.buyer_id) & (Conversation.deal_status.in_(['SOLD', 'CONFIRMED'])))
+            .where(Item.status == 'SOLD')
+        ) or 0
+        agent_deal_rate = round(attributed_deals / (sold_items or 1) * 100, 1) if sold_items else 0.0
+
+        total_drafts = db.scalar(select(func.count(ItemDraft.id))) or 0
+        draft_abandonment = round(total_drafts / (total_drafts + total_items or 1) * 100, 1)
+
+        total_convs = db.scalar(select(func.count(Conversation.id))) or 0
+        convs_with_reply = db.scalar(
+            select(func.count(distinct(ChatMessage.conversation_id)))
+            .where(ChatMessage.sender_id != Conversation.buyer_id)
+            .join(Conversation, Conversation.id == ChatMessage.conversation_id)
+        ) or 0
+        reply_rate = round(convs_with_reply / (total_convs or 1) * 100, 1)
+
+        return {
+            'realtime': {
+                'active_online_users': active_users,
+                'active_sessions': active_sessions,
+                'rolling_anon_uv': rolling_anon_uv,
+                'total_online_presence': active_users + rolling_anon_uv
+            },
+            'liquidity': {
+                'total_items': total_items,
+                'sold_items': sold_items,
+                'sell_through_rate_pct': sell_through_rate,
+                'avg_days_to_sell': avg_days,
+                'total_gmv_yuan': total_gmv_yuan,
+                'avg_order_value_yuan': avg_order_value_yuan,
+                'recent_30d_gmv_yuan': recent_30d_gmv_yuan,
+                'active_items': active_items,
+                'active_demands': active_demands,
+                'supply_demand_ratio': supply_demand_ratio,
+                'categories': categories,
+                'first_inquiry_rate_72h_pct': inquiry_rate_72h,
+                'avg_hours_to_first_inquiry': avg_hours_to_inquiry,
+                'zombie_items_count': zombie_count,
+                'zombie_rate_pct': zombie_rate,
+                'top_zombies': top_zombies,
+            },
+            'dwell_insights': {
+                'page_distribution': page_dwell_distribution,
+                'hesitation_items': hesitation_items,
+            },
+            'ai_attribution': {
+                'total_notifications': total_notifications,
+                'chat_conversions': chat_conversions,
+                'push_to_chat_cvr_pct': push_to_chat_cvr,
+                'attributed_deals': attributed_deals,
+                'agent_attributed_deal_rate_pct': agent_deal_rate
+            },
+            'friction': {
+                'total_drafts': total_drafts,
+                'total_published': total_items,
+                'draft_abandonment_pct': draft_abandonment,
+                'total_conversations': total_convs,
+                'responded_conversations_pct': reply_rate
+            }
+        }
 
     app.mount('/uploads', StaticFiles(directory=upload_dir), name='uploads')
     frontend = ROOT / 'frontend/dist'
