@@ -82,13 +82,15 @@ import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
 import { SearchBar } from "./SearchBar";
 import { FeedbackCenter, FeedbackWorkspace, type FeedbackNotices } from "./Feedback";
 
+import { AdminMetrics, type BusinessOverviewData } from "./AdminMetrics";
+
 const nav = [
   { key: "market", label: "逛逛校园", icon: Compass },
   { key: "wanted", label: "求购看板", icon: Sprout },
   { key: "intents", label: "我的代蹲", icon: Sparkles },
   { key: "profile", label: "我的主页", icon: UserRound },
 ];
-type View = "market" | "profile" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "mywanted" | "admin" | "admin-chat" | "admin-reports" | "admin-logs" | "admin-feedback";
+type View = "market" | "profile" | "intents" | "messages" | "wanted" | "favorites" | "mine" | "mywanted" | "admin" | "admin-chat" | "admin-reports" | "admin-logs" | "admin-feedback" | "admin-metrics";
 type ModalName =
   | "login"
   | "intent"
@@ -110,6 +112,7 @@ const validViews = [
   "mine",
   "mywanted",
   "admin",
+  "admin-metrics",
   "admin-chat",
   "admin-reports",
   "admin-logs",
@@ -396,6 +399,58 @@ export default function App() {
         })
         .catch((e) => setToast(e.message));
   }, []);
+
+  // 页面与商品停留时长埋点上报 (Page & Item Dwell Time via sendBeacon)
+  useEffect(() => {
+    const activePage =
+      modal === "detail" && selected
+        ? "item_detail"
+        : modal === "publish"
+        ? "publish"
+        : modal === "wanted"
+        ? "post_wanted"
+        : view;
+    const activeItemId = modal === "detail" && selected ? selected.id : null;
+    let enterTime = Date.now();
+
+    const reportDwell = () => {
+      const durationSeconds = Math.round((Date.now() - enterTime) / 1000);
+      if (durationSeconds < 2) return;
+      const payload = JSON.stringify({
+        page: activePage,
+        item_id: activeItemId,
+        duration_seconds: Math.min(durationSeconds, 7200),
+      });
+
+      if (navigator.sendBeacon) {
+        const blob = new Blob([payload], { type: "application/json" });
+        navigator.sendBeacon("/api/v1/analytics/dwell", blob);
+      } else {
+        fetch("/api/v1/analytics/dwell", {
+          method: "POST",
+          body: payload,
+          headers: { "Content-Type": "application/json" },
+          keepalive: true,
+        }).catch(() => {});
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        reportDwell();
+      } else {
+        enterTime = Date.now();
+      }
+    };
+
+    window.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("pagehide", reportDwell);
+    return () => {
+      window.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("pagehide", reportDwell);
+      reportDwell();
+    };
+  }, [view, modal, selected?.id]);
   const navigate = (v: View) => {
     location.hash = v;
     setPendingConversation(null);
@@ -620,7 +675,7 @@ export default function App() {
   const announcementUnreadCount = announcementUnread.data?.count ?? 0;
   const allUnread = unread + chatUnread + feedbackUnread + announcementUnreadCount + (siteFeedbackNotices.data?.count ?? 0);
   const personalView = ["profile", "intents", "messages", "favorites", "mine", "mywanted"].includes(view);
-  const adminView = ["admin", "admin-chat", "admin-reports", "admin-logs", "admin-feedback"].includes(view);
+  const adminView = ["admin", "admin-chat", "admin-reports", "admin-logs", "admin-feedback", "admin-metrics"].includes(view);
 
   if (!meta)
     return (
@@ -2457,10 +2512,11 @@ export default function App() {
   );
 }
 
-type AdminView = "admin" | "admin-chat" | "admin-reports" | "admin-logs" | "admin-feedback";
+type AdminView = "admin" | "admin-chat" | "admin-reports" | "admin-logs" | "admin-feedback" | "admin-metrics";
 
 const adminTabs = [
   { key: "admin", label: "公告管理" },
+  { key: "admin-metrics", label: "商业指标与访客" },
   { key: "admin-chat", label: "聊天举报" },
   { key: "admin-reports", label: "商品举报" },
   { key: "admin-feedback", label: "用户反馈" },
@@ -2517,6 +2573,22 @@ function Admin({
   );
   const adminAnnouncements = useResource<AdminAnnouncement[]>(
     "/admin/announcements", revision, user?.role === "admin",
+  );
+  const userGrowth = useResource<{
+    total_users: number;
+    base_count: number;
+    trend: { date: string; new_users: number; cumulative_users: number }[];
+  }>("/admin/analytics/user-growth", revision, user?.role === "admin" && view === "admin-metrics");
+  const visitorFunnel = useResource<{
+    total_unique_visitors: number;
+    unregistered_browsers: number;
+    funnel: { stage: string; count: number; pct: number }[];
+    friction_drop_off_pct: number;
+  }>("/admin/analytics/visitor-funnel", revision, user?.role === "admin" && view === "admin-metrics");
+  const businessOverview = useResource<BusinessOverviewData>(
+    "/admin/analytics/business-overview",
+    revision,
+    user?.role === "admin" && view === "admin-metrics"
   );
   const [busy, setBusy] = useState(false);
   const [annTitle, setAnnTitle] = useState("");
@@ -2754,6 +2826,14 @@ function Admin({
         />
       )}
         </>
+      )}
+      {view === "admin-metrics" && (
+        <AdminMetrics
+          growthData={userGrowth.data ?? null}
+          funnelData={visitorFunnel.data ?? null}
+          businessData={businessOverview.data ?? null}
+          error={userGrowth.error || visitorFunnel.error || businessOverview.error}
+        />
       )}
       {view === "admin-logs" && (
         <>
