@@ -334,7 +334,7 @@ export function PublishForm({
   const [parsing, setParsing] = useState(false);
   const [title, setTitle] = useState(editingItem?.title || draft?.title || prefill?.title || "");
   const [description, setDescription] = useState(editingItem?.description || draft?.description || "");
-  const [category, setCategory] = useState(editingItem?.category || (draft ? draft.category || "" : prefill?.category || meta.categories[0]));
+  const [category, setCategory] = useState(editingItem?.category || draft?.category || prefill?.category || "");
   const [price, setPrice] = useState(editingItem ? String(editingItem.price) : draft?.price != null ? String(draft.price) : "");
   const [campus, setCampus] = useState(editingItem?.campus || draft?.campus || prefill?.campus || meta.campuses[0]);
   const [condition, setCondition] = useState(editingItem?.condition_grade || draft?.condition_grade || "95新");
@@ -558,7 +558,7 @@ export function PublishForm({
             value={category}
             onChange={(e) => setCategory(e.target.value)}
           >
-            {draft && <option value="" disabled>请选择商品分类</option>}
+            <option value="" disabled>请选择商品分类</option>
             {meta.categories.map((c) => (
               <option key={c}>{c}</option>
             ))}
