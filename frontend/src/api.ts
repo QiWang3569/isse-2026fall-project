@@ -59,6 +59,7 @@ export type Meta = {
   active_items: number;
   email_auth_ready: boolean;
   chat_email_ready: boolean;
+  vision_enabled: boolean;
 };
 export type ChatMessage = {
   id: string;
@@ -213,10 +214,12 @@ export async function api<T>(
   path: string,
   method = "GET",
   data?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const requestAuthRevision = authRevision;
   const response = await fetch("/api/v1" + path, {
     method,
+    signal,
     credentials: "include",
     ...(data instanceof FormData
       ? { body: data }

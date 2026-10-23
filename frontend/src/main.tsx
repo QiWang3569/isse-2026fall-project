@@ -4,6 +4,7 @@ import App from "./App";
 import "./styles.css";
 import "./market-refresh.css";
 import "./notification-gallery.css";
+import "./vision-publishing.css";
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />
