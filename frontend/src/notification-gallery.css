@@ -1,0 +1,19 @@
+.announcement-open { display: grid; gap: 8px; width: 100%; border: 0; background: transparent; color: inherit; padding: 8px 0; text-align: left; cursor: pointer; }
+.announcement-open strong { font-size: 16px; }
+.announcement-open span { line-height: 1.6; overflow-wrap: anywhere; }
+.announcement-open small { color: var(--muted); }
+.announcement-pages, .image-viewer-controls { display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 12px 0; }
+.announcement-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; }
+.product-photo-open { display: block; width: 100%; border: 0; padding: 0; background: transparent; color: inherit; text-align: center; cursor: zoom-in; border-radius: 12px; overflow: hidden; }
+.product-photo-open > span { display: block; padding: 8px; font-size: 12px; }
+.detail-photos .product-photo-open img { width: 100%; height: 100%; object-fit: cover; }
+.image-viewer-stage { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: min(58dvh, 650px, calc(90dvh - 280px)); min-height: 160px; overflow: hidden; background: #111; border-radius: 12px; color: white; touch-action: none; user-select: none; }
+.image-viewer-stage.zoomed { cursor: grab; }
+.image-viewer-stage.zoomed:active { cursor: grabbing; }
+.image-viewer-stage > img { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.image-loading { position: absolute; }
+.image-viewer-thumbnails { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 10px; }
+.image-viewer-thumbnails button { flex: 0 0 56px; width: 56px; height: 56px; padding: 2px; border: 2px solid transparent; border-radius: 6px; background: transparent; cursor: pointer; }
+.image-viewer-thumbnails button[aria-pressed="true"] { border-color: #5b9872; }
+.image-viewer-thumbnails img { width: 100%; height: 100%; object-fit: cover; border-radius: 3px; }
+@media (max-width: 650px) { .image-viewer-controls { gap: 4px; } .image-viewer-stage { height: min(52dvh, calc(90dvh - 280px)); } }

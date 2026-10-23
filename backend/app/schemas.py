@@ -150,6 +150,22 @@ class WantedUpdate(StrictModel):
     campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v) if v is not None else None))
 
 
+class WantedParseRequest(StrictModel):
+    raw: str = Field(min_length=2, max_length=2500)
+
+
+class ParsedWanted(StrictModel):
+    title: str | None = Field(default=None, max_length=120)
+    description: str | None = Field(default=None, max_length=2500)
+    category: str | None = None
+    budget: Decimal | None = Field(default=None, ge=0, le=999999, decimal_places=2)
+    campus: str = '不限校区'
+    clarification: str | None = Field(default=None, max_length=500)
+
+    category_valid = field_validator('category')(classmethod(lambda cls, v: ItemCreate.category_valid(v) if v is not None else None))
+    campus_valid = field_validator('campus')(classmethod(lambda cls, v: ItemCreate.campus_valid(v)))
+
+
 class ReportCreate(StrictModel):
     reason: str = Field(min_length=5, max_length=1000)
 

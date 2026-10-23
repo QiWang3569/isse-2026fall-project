@@ -1,3 +1,5 @@
+import { notificationsChanged } from "./notificationEvents";
+
 export type User = {
   id: string;
   nickname: string;
@@ -57,6 +59,7 @@ export type Meta = {
   active_items: number;
   email_auth_ready: boolean;
   chat_email_ready: boolean;
+  vision_enabled: boolean;
 };
 export type ChatMessage = {
   id: string;
@@ -112,6 +115,14 @@ export type ParsedItem = {
   tags: string[];
   clarification: string | null;
 };
+export type ParsedWanted = {
+  title: string | null;
+  description: string | null;
+  category: string | null;
+  budget: number | null;
+  campus: string;
+  clarification: string | null;
+};
 export type Intent = Parsed & {
   id: string;
   raw_query: string;
@@ -157,6 +168,7 @@ export type SaleFeedbackNotice = {
   item: Item;
   reporter: User;
   created_at: string;
+  is_read: boolean;
 };
 export type Announcement = {
   id: string;
@@ -164,6 +176,7 @@ export type Announcement = {
   body: string;
   kind: "公告" | "更新";
   created_at: string;
+  is_read?: boolean | null;
 };
 export type AdminAnnouncement = Announcement & {
   active: boolean;
@@ -209,10 +222,12 @@ export async function api<T>(
   path: string,
   method = "GET",
   data?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const requestAuthRevision = authRevision;
   const response = await fetch("/api/v1" + path, {
     method,
+    signal,
     credentials: "include",
     ...(data instanceof FormData
       ? { body: data }
@@ -240,6 +255,7 @@ export async function api<T>(
     );
   }
   if (method === "POST" && ["/auth/refresh", "/auth/demo", "/auth/email/verify", "/auth/password/login", "/auth/password/set", "/auth/logout"].includes(path)) authRevision++;
+  if (method !== "GET" && /\/(?:notifications|conversations|feedback|sale-feedback|announcements)(?:\/|$)/.test(path)) notificationsChanged();
   return result as T;
 }
 export const money = (n: number) =>

@@ -12,8 +12,8 @@
 [![Node.js 22](https://img.shields.io/badge/Node.js-22-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
 [![PostgreSQL 16 + pgvector](https://img.shields.io/badge/PostgreSQL-16%2Bpgvector-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![tests](https://img.shields.io/badge/tests-210%20passed-brightgreen)](#测试与覆盖率)
-[![coverage](https://img.shields.io/badge/coverage-93%25-2ea44f)](#测试与覆盖率)
+[![tests](https://img.shields.io/badge/tests-287%20passed-brightgreen)](#测试与覆盖率)
+[![coverage](https://img.shields.io/badge/coverage-94%25-2ea44f)](#测试与覆盖率)
 
 > 本仓库已转为公开（public）。请勿把本地 `.env`、数据库、图片或密钥提交到仓库。
 
@@ -71,6 +71,8 @@ flowchart LR
 ### 商品与搜索
 
 - 发布、编辑和草稿最多 9 张图片，每张不超过 6 MB；支持自然语言智能识别填充与按行批量导入待发布草稿。
+- 可选[识图发布](docs/VISION_ASSISTED_PUBLISHING.md)：选 1–3 张照片生成标题、分类、描述和标签建议，核对后逐项应用；独立配置 `VISION_*`，默认关闭。
+- 批量导入支持合照拆分为最多 10 件候选商品，可编辑、删除、合并套装后保存为草稿；补齐信息后勾选批量发布，合照不自动充当每件商品封面。
 - 分类、关键词、校区、价格、成色筛选与排序分页；收藏、三件对比与分享链接；收藏分类与同校区优先的基础推荐。
 - 智能搜索将自然语言解析为分类、预算、成色、关键词，支持“左右/大约”等约数价格。
 - 商品撤回、成交后「再发一件」、待确认收货禁止重新上架。
@@ -79,7 +81,7 @@ flowchart LR
 
 - 必须条件、排除项、偏好三组解析；本地关键词召回或远程模型精筛，并给出匹配理由与待确认问题。
 - 后台任务持久化、自动重试、手动重试、重启恢复；通知去重与已读状态。
-- 发布求购自动关联代蹲，修改 / 暂停 / 结束状态双向同步；私密代蹲可发布到公开看板。
+- 发布求购支持自然语言智能填充（标题、分类、预算、校区），并自动关联代蹲，修改 / 暂停 / 结束状态双向同步；私密代蹲可发布到公开看板。
 
 ### 站内聊天、反馈与交易
 
@@ -91,7 +93,8 @@ flowchart LR
 ### 治理与数据
 
 - 管理员工作台：公告管理、用户反馈、聊天举报、商品举报、操作记录；文字风险词与同名商品线索。
-- 公告统一从消息铃铛查看，登录用户仅把实际展示的公告标为已读。
+- 公告统一从消息铃铛查看，展开全文后标为已读并移出未读列表，历史公告可分页查看；通知计数跨标签页同步，已读与待处理分别展示。
+- 商品照片可点击放大，支持切图、缩放、拖动与手机手势。更新及验证记录见 [通知与商品图片](docs/NOTIFICATIONS_AND_GALLERY.md)。
 - 商业指标看板：用户增长、访客漏斗、GMV、动销率、停留时长与犹豫商品。
 - Prometheus 导出应用指标与自定义业务指标（活跃用户、会话、GMV、停留时长等）。
 
@@ -192,7 +195,7 @@ npm ci
 npm run build
 ```
 
-最新一次本地运行：210 项测试全部通过，整体行覆盖率 93%。GitHub Actions 会在推送与合并请求时，分别在 Windows 与 Linux 上执行后端测试和前端构建，结果见 [Actions](https://github.com/QiWang3569/yandu/actions)。
+最新一次本地运行：287 项后端测试全部通过，整体行覆盖率 94%；前端通过 TypeScript 类型检查与 Vite 生产构建。GitHub Actions 会在推送与合并请求时，分别在 Windows 与 Linux 上执行后端测试和前端构建，结果见 [Actions](https://github.com/QiWang3569/yandu/actions)。
 
 ## 部署
 
@@ -228,6 +231,8 @@ data/                   数据库、图片、日志（不提交）
 - [邮箱登录与站内聊天](docs/EMAIL_AND_CHAT.md)
 - [买家助手说明](docs/BUYER_AGENT.md)
 - [站内意见反馈](docs/FEEDBACK.md)
+- [通知已读与商品图片查看](docs/NOTIFICATIONS_AND_GALLERY.md)
+- [识图辅助发布方案（调研）](docs/VISION_ASSISTED_PUBLISHING.md)
 - [修改日志](docs/CHANGELOG.md) / [验证记录](docs/VALIDATION.md)
 
 ## 许可证与贡献

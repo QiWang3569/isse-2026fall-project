@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, Check, ImagePlus, Sparkles, Trash2, X } from "lucide-react";
-import { api, type Meta, type Parsed, type ParsedItem, type Item, type ItemDraft, type Wanted, type Intent } from "./api";
+import { api, type Meta, type Parsed, type ParsedItem, type ParsedWanted, type Item, type ItemDraft, type Wanted, type Intent } from "./api";
+import { VisionPublisher } from "./VisionPublisher";
+import { VisionBatchImporter } from "./VisionBatchImporter";
 
 type Common = { meta: Meta; onDone: () => void };
 const MAX_ITEM_IMAGES = 9;
@@ -209,12 +211,17 @@ export function PublishWorkspace({ meta, onDone, onDraftPublished }: Common & { 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [imageBusy, setImageBusy] = useState(false);
+  const [publishIds, setPublishIds] = useState<string[]>([]);
+  const [confirmBatch, setConfirmBatch] = useState(false);
+  const publishing = useRef(false);
+  const batchReceipt = useRef<{ body: string; id: string } | null>(null);
   const lines = source.split(/\r\n|\r|\n/).map((line) => line.trim()).filter(Boolean);
 
   useEffect(() => {
     let alive = true;
     api<ItemDraft[]>("/item-drafts/")
-      .then((rows) => { if (alive) setDrafts(rows); })
+      .then((rows) => { if (alive) setDrafts(existing => [...existing, ...rows.filter(row => !existing.some(draft => draft.id === row.id))]); })
       .catch((e) => { if (alive) setError((e as Error).message); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
@@ -251,6 +258,8 @@ export function PublishWorkspace({ meta, onDone, onDraftPublished }: Common & { 
     try {
       await api(`/item-drafts/${draft.id}`, "DELETE");
       setDrafts((existing) => existing.filter((item) => item.id !== draft.id));
+      setPublishIds((existing) => existing.filter((id) => id !== draft.id));
+      setConfirmBatch(false);
       setNotice("待发布商品已删除");
     } catch (e) {
       setError((e as Error).message);
@@ -259,7 +268,28 @@ export function PublishWorkspace({ meta, onDone, onDraftPublished }: Common & { 
     }
   }
 
-  if (activeDraft) return <PublishForm key={activeDraft.id} meta={meta} draft={activeDraft} onDone={() => {
+  const ready = (draft: ItemDraft) => Boolean(draft.title && draft.title.length >= 2
+    && draft.description && draft.description.length >= 5 && draft.category && meta.categories.includes(draft.category)
+    && draft.price != null && meta.campuses.includes(draft.campus) && meta.conditions.includes(draft.condition_grade));
+  const selectedDrafts = drafts.filter(draft => publishIds.includes(draft.id));
+
+  async function publishSelected() {
+    if (busy || publishing.current || !confirmBatch || !selectedDrafts.length) return;
+    const versions = selectedDrafts.map(draft => ({ id: draft.id, updated_at: draft.updated_at }));
+    const body = JSON.stringify(versions);
+    if (batchReceipt.current?.body !== body) batchReceipt.current = { body, id: crypto.randomUUID() };
+    publishing.current = true; setBusy(true); setError("");
+    try {
+      const published = await api<Item[]>("/item-drafts/publish-batch", "POST", { request_id: batchReceipt.current.id, drafts: versions });
+      setDrafts(existing => existing.filter(draft => !versions.some(version => version.id === draft.id)));
+      setPublishIds([]); setConfirmBatch(false);
+      setNotice(`已发布 ${published.length} 件商品，可在“我的售卖”中查看。`);
+      onDraftPublished?.();
+    } catch (e) { setError((e as Error).message); }
+    finally { publishing.current = false; setBusy(false); }
+  }
+
+  return <>{activeDraft && <PublishForm key={activeDraft.id} meta={meta} draft={activeDraft} onDone={() => {
     setDrafts((existing) => existing.filter((item) => item.id !== activeDraft.id));
     setActiveDraft(null);
     setNotice("商品已发布，可以继续处理其他待发布商品");
@@ -269,33 +299,64 @@ export function PublishWorkspace({ meta, onDone, onDraftPublished }: Common & { 
       setDrafts((existing) => existing.map((item) => item.id === saved.id ? saved : item));
       setActiveDraft(null);
       setNotice("草稿已保存，随时可以继续完善并发布");
-    }} />;
+    }} />}
 
-  return <div className="publish-workspace">
+  <div hidden={Boolean(activeDraft)}><div className="publish-workspace">
     <div className="publish-tabs" role="tablist" aria-label="发布方式">
       {([ ["single", "单件发布"], ["batch", "批量导入"], ["drafts", `待发布 ${drafts.length}`] ] as const).map(([key, label]) =>
         <button key={key} type="button" role="tab" aria-selected={tab === key}
-          className={tab === key ? "active" : ""} onClick={() => { setTab(key); setError(""); }}>
+          className={tab === key ? "active" : ""} disabled={busy || imageBusy}
+          onClick={() => { setTab(key); setError(""); setConfirmBatch(false); }}>
           {label}
         </button>)}
     </div>
     <div hidden={tab !== "single"}><PublishForm meta={meta} onDone={onDone} /></div>
-    {tab === "batch" && <div className="stack-form">
+    <div hidden={tab !== "batch"}><div className="stack-form">
+      {meta.vision_enabled && <VisionBatchImporter meta={meta} disabled={busy} onBusyChange={setImageBusy}
+        onImported={imported => {
+          setDrafts(existing => [...imported, ...existing.filter(draft => !imported.some(row => row.id === draft.id))]);
+          setNotice(imported.length ? `已保存 ${imported.length} 件识图草稿。请确认价格、成色和校区，按需补充单件照片后发布。`
+            : "这一批已经导入，请查看待发布列表或我的售卖。");
+          setTab("drafts");
+        }} />}
+      <strong>按文字批量导入</strong>
       <div className="form-callout"><Sparkles size={22} /><p>一行写一件商品，可一次导入 1–10 件。系统会分别识别标题、价格等信息并保存为私人草稿，不会立即公开。</p></div>
       <label>每行一件待发布商品
         <textarea rows={8} maxLength={10000} value={source} onChange={(e) => setSource(e.target.value)}
           placeholder={"九成新罗技静音鼠标，50 元，万柳面交\n高数教材一本，20 元，燕园面交"} />
       </label>
       <p className="hint">已填写 {lines.length} 件。导入后请逐件检查识别结果，可以添加照片，再选择发布。最多保存 50 件待发布商品。</p>
-      <button type="button" className="button primary full" disabled={busy || !lines.length} onClick={() => void importLines()}>
+      <button type="button" className="button primary full" disabled={busy || imageBusy || !lines.length} onClick={() => void importLines()}>
         {busy ? "正在逐件识别…" : "导入待发布商品"}
       </button>
-    </div>}
+    </div></div>
     {tab === "drafts" && <div className="draft-list">
+      {drafts.length > 0 && <div className="batch-publish-bar">
+        <span>已选 {selectedDrafts.length}/10 件 · 信息完整后可勾选</span>
+        <button type="button" className="button secondary" disabled={busy || !selectedDrafts.length}
+          onClick={() => setConfirmBatch(true)}>核对并批量发布</button>
+      </div>}
+      {confirmBatch && <section className="batch-publish-confirm" aria-label="批量发布核对">
+        <strong>确认公开所选 {selectedDrafts.length} 件商品</strong>
+        <p className="hint">请核对价格、成色和校区；没有单件照片的商品将以文字信息发布。</p>
+        <ul>{selectedDrafts.map(draft => <li key={draft.id}>{draft.title} · ¥{draft.price} · {draft.campus} · {draft.condition_grade}
+          {draft.images.length ? ` · ${draft.images.length} 张照片` : " · 暂无照片"}</li>)}</ul>
+        <div className="batch-review-actions">
+          <button type="button" className="button secondary" disabled={busy} onClick={() => setConfirmBatch(false)}>返回调整</button>
+          <button type="button" className="button primary" disabled={busy || !selectedDrafts.length}
+            onClick={() => void publishSelected()}>{busy ? "正在发布…" : `确认发布 ${selectedDrafts.length} 件`}</button>
+        </div>
+      </section>}
       {loading ? <p className="muted">正在加载待发布商品…</p> : drafts.length === 0 ?
         <div className="draft-empty"><p>还没有待发布商品</p><button type="button" className="button secondary" onClick={() => setTab("batch")}>写一段话批量导入</button></div> :
         drafts.map((draft) => <article className="draft-card" key={draft.id}>
           <div className="draft-card-main">
+            <label className="batch-draft-check"><input type="checkbox" aria-label={`选择发布 ${draft.title || "待补充标题"}`}
+              checked={publishIds.includes(draft.id)} disabled={busy || !ready(draft) || (!publishIds.includes(draft.id) && publishIds.length >= 10)}
+              onChange={event => {
+                setPublishIds(existing => event.target.checked ? [...existing, draft.id] : existing.filter(id => id !== draft.id));
+                setConfirmBatch(false);
+              }} />{ready(draft) ? "加入批量发布" : "请先完善信息"}</label>
             <span className="draft-status">待发布</span>
             <h3>{draft.title || "待补充标题"}</h3>
             <p>{draft.raw}</p>
@@ -303,14 +364,16 @@ export function PublishWorkspace({ meta, onDone, onDraftPublished }: Common & { 
             {draft.clarification && <small>请核对：{draft.clarification}</small>}
           </div>
           <div className="draft-card-actions">
-            <button type="button" className="button secondary" onClick={() => setActiveDraft(draft)}>完善并发布</button>
+            <button type="button" className="button secondary" disabled={busy} onClick={() => {
+              setPublishIds(existing => existing.filter(id => id !== draft.id)); setConfirmBatch(false); setActiveDraft(draft);
+            }}>完善并发布</button>
             <button type="button" className="icon-button" aria-label={`删除 ${draft.title || "待发布商品"}`} disabled={busy} onClick={() => void removeDraft(draft)}><Trash2 size={17} /></button>
           </div>
         </article>)}
     </div>}
     {notice && <p className="draft-notice" role="status">{notice}</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
-  </div>;
+  </div></div></>;
 }
 
 export function PublishForm({
@@ -333,7 +396,7 @@ export function PublishForm({
   const [parsing, setParsing] = useState(false);
   const [title, setTitle] = useState(editingItem?.title || draft?.title || prefill?.title || "");
   const [description, setDescription] = useState(editingItem?.description || draft?.description || "");
-  const [category, setCategory] = useState(editingItem?.category || (draft ? draft.category || "" : prefill?.category || meta.categories[0]));
+  const [category, setCategory] = useState(editingItem?.category || draft?.category || prefill?.category || "");
   const [price, setPrice] = useState(editingItem ? String(editingItem.price) : draft?.price != null ? String(draft.price) : "");
   const [campus, setCampus] = useState(editingItem?.campus || draft?.campus || prefill?.campus || meta.campuses[0]);
   const [condition, setCondition] = useState(editingItem?.condition_grade || draft?.condition_grade || "95新");
@@ -444,7 +507,7 @@ export function PublishForm({
     }
   }
   return (
-    <form className="stack-form" onSubmit={submit}>
+    <form className="stack-form publish-form" onSubmit={submit}>
       {draft && onBack && <button type="button" className="text-button" onClick={onBack}>
         <ArrowLeft size={15} /> 返回待发布列表
       </button>}
@@ -518,6 +581,14 @@ export function PublishForm({
         <p className="hint" aria-live="polite">已上传 {images.length}/9 张，还可添加 {MAX_ITEM_IMAGES - images.length} 张{uploadProgress && ` · ${uploadProgress}`}</p>
         {uploadError && <p className="form-error" role="alert">{uploadError}</p>}
       </div>
+      {meta.vision_enabled && <VisionPublisher images={images} categories={meta.categories}
+        values={{ title, description, category, tags }} disabled={busy || uploading || parsing}
+        onApply={(values) => {
+          if (values.title !== undefined) setTitle(values.title);
+          if (values.description !== undefined) setDescription(values.description);
+          if (values.category !== undefined) setCategory(values.category);
+          if (values.tags !== undefined) setTags(values.tags);
+        }} />}
       <label>
         给好物起个名字
         <input
@@ -549,7 +620,7 @@ export function PublishForm({
             value={category}
             onChange={(e) => setCategory(e.target.value)}
           >
-            {draft && <option value="" disabled>请选择商品分类</option>}
+            <option value="" disabled>请选择商品分类</option>
             {meta.categories.map((c) => (
               <option key={c}>{c}</option>
             ))}
@@ -629,18 +700,50 @@ export function WantedForm({
 }: Common & { initial: string; editingWanted?: Wanted | null; initialIntent?: Intent | null }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [raw, setRaw] = useState("");
+  const [title, setTitle] = useState(editingWanted?.title || initialIntent?.raw_query.split("\n")[0].slice(0, 120) || initial || "");
+  const [description, setDescription] = useState(editingWanted?.description ?? initialIntent?.raw_query ?? "");
+  const [category, setCategory] = useState(editingWanted?.category || initialIntent?.category || "");
+  const [budget, setBudget] = useState(editingWanted?.budget != null ? String(editingWanted.budget) : initialIntent?.max_price != null ? String(initialIntent.max_price) : "");
+  const [campus, setCampus] = useState(editingWanted?.campus || initialIntent?.campus || "不限校区");
+
+  async function smartFill() {
+    if (raw.trim().length < 2) {
+      setError("请先输入一段求购描述");
+      return;
+    }
+    setParsing(true);
+    setError("");
+    try {
+      const result = await api<{ parsed: ParsedWanted }>("/wanted/parse", "POST", {
+        raw: raw.trim(),
+      });
+      const p = result.parsed;
+      if (p.title) setTitle(p.title);
+      if (p.description) setDescription(p.description);
+      if (p.category) setCategory(p.category);
+      if (p.budget != null) setBudget(String(p.budget));
+      if (p.campus) setCampus(p.campus);
+      if (p.clarification) setError(p.clarification);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setParsing(false);
+    }
+  }
+
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
     setError("");
     try {
-      const data = new FormData(e.currentTarget);
       const payload = {
-        title: data.get("title"),
-        description: data.get("description"),
-        category: data.get("category") || null,
-        budget: data.get("budget") === "" ? null : Number(data.get("budget")),
-        campus: data.get("campus"),
+        title: title.trim(),
+        description: description.trim(),
+        category: category || null,
+        budget: budget === "" ? null : Number(budget),
+        campus,
         ...(!editingWanted && initialIntent ? { intent_id: initialIntent.id } : {}),
       };
       if (editingWanted) {
@@ -660,31 +763,56 @@ export function WantedForm({
       <p className="muted">
         发布到求购看板的同时，燕渡会自动替你代蹲。已有代蹲会沿用原来的匹配记录。
       </p>
+      <div className="form-callout">
+        <Sparkles size={22} />
+        <p>
+          一句话说出你想收的东西，点“智能识别并填充”，信息会自动填好，确认后即可发布。
+        </p>
+      </div>
+      <label>
+        一句话描述求购
+        <textarea
+          value={raw}
+          onChange={(e) => setRaw(e.target.value)}
+          maxLength={2500}
+          rows={2}
+          placeholder="例如：求一台九成新 iPad，预算 2000 元，燕园面交"
+        />
+      </label>
+      <button
+        type="button"
+        className="button secondary"
+        disabled={parsing || busy}
+        onClick={() => void smartFill()}
+      >
+        <Sparkles size={16} />
+        {parsing ? "识别中…" : "智能识别并填充"}
+      </button>
       <label>
         你想求购什么？
         <input
-          name="title"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
           required
           minLength={2}
           maxLength={120}
-          defaultValue={editingWanted?.title || initialIntent?.raw_query.split("\n")[0].slice(0, 120) || initial}
           placeholder="求一本离散数学教材"
         />
       </label>
       <label>
         具体要求
         <textarea
-          name="description"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
           maxLength={2500}
           rows={3}
-          defaultValue={editingWanted?.description ?? initialIntent?.raw_query}
           placeholder="型号、版本、能接受的成色、交接时间…"
         />
       </label>
       <div className="form-grid">
         <label>
           物品分类
-          <select name="category" defaultValue={editingWanted?.category || initialIntent?.category || ""}>
+          <select value={category} onChange={(e) => setCategory(e.target.value)}>
             <option value="">不限分类</option>
             {meta.categories.map((c) => (
               <option key={c}>{c}</option>
@@ -694,18 +822,18 @@ export function WantedForm({
         <label>
           最高预算（元）
           <input
-            name="budget"
             type="number"
             min="0"
             max="999999"
             step="0.01"
-            defaultValue={editingWanted?.budget ?? initialIntent?.max_price ?? ""}
+            value={budget}
+            onChange={(e) => setBudget(e.target.value)}
             placeholder="不限预算"
           />
         </label>
         <label>
           交接校区
-          <select name="campus" defaultValue={editingWanted?.campus || initialIntent?.campus || "不限校区"}>
+          <select value={campus} onChange={(e) => setCampus(e.target.value)}>
             {meta.campuses.map((c) => (
               <option key={c}>{c}</option>
             ))}
@@ -718,7 +846,7 @@ export function WantedForm({
           {error}
         </p>
       )}
-      <button className="button primary full" disabled={busy}>
+      <button className="button primary full" disabled={busy || parsing}>
         {busy
           ? editingWanted
             ? "保存中…"

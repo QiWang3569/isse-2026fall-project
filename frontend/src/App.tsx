@@ -56,7 +56,6 @@ import {
   type Notice,
   type AdminAnnouncement,
   type SaleFeedbackNotice,
-  type Announcement,
   type Wanted,
   type Report,
   type ChatReport,
@@ -80,7 +79,9 @@ import { AuthMethods, ChatCenter, PasswordSetup } from "./AccountAndChat";
 import { ProfileHome, ProfileNav, type PersonalView } from "./Profile";
 import { SearchBar } from "./SearchBar";
 import { FeedbackCenter, FeedbackWorkspace, type FeedbackNotices } from "./Feedback";
-import { AnnouncementEntry } from "./AnnouncementEntry";
+import { AnnouncementFeed } from "./AnnouncementFeed";
+import { ProductGallery } from "./ProductGallery";
+import { listenForNotificationChanges, notificationVersion } from "./notificationEvents";
 import { useSessionRenewal } from "./session";
 import { SessionRecovery } from "./SessionRecovery";
 
@@ -143,54 +144,52 @@ function useResource<T>(
   revision: number,
   enabled = true,
   poll = false,
+  identity = "",
 ) {
   const [data, setData] = useState<T | null>(null),
     [loading, setLoading] = useState(false),
     [error, setError] = useState("");
+  const resourceKey = useRef("");
   useEffect(() => {
     let alive = true;
-    setData(null);
+    let sequence = 0;
+    const key = `${url}:${identity}`;
+    if (resourceKey.current !== key || !enabled) setData(null);
+    resourceKey.current = key;
     setError("");
     if (!enabled) {
       setLoading(false);
       return;
     }
     setLoading(true);
-    api<T>(url)
+    const read = () => {
+      const request = ++sequence, epoch = notificationVersion();
+      void api<T>(url)
       .then((d) => {
-        if (alive) setData(d);
+        if (alive && request === sequence && (!identity || epoch === notificationVersion())) { setData(d); setError(""); }
       })
       .catch((e) => {
-        if (alive) setError(e.message);
+        if (alive && request === sequence) setError(e.message);
       })
       .finally(() => {
         if (alive) setLoading(false);
       });
+    };
+    read();
     const timer = poll
-      ? window.setInterval(() => {
-          api<T>(url)
-            .then((d) => {
-              if (alive) {
-                setData(d);
-                setError("");
-              }
-            })
-            .catch((e) => {
-              if (alive) setError(e.message);
-            });
-        }, 10000)
+      ? window.setInterval(() => { if (document.visibilityState === "visible") read(); }, 10000)
       : undefined;
     return () => {
       alive = false;
       if (timer !== undefined) clearInterval(timer);
     };
-  }, [url, revision, enabled, poll]);
+  }, [url, revision, enabled, poll, identity]);
   return { data, loading, error };
 }
 
 export default function App() {
-  const [announcementRevision, setAnnouncementRevision] = useState(0);
-  const seenAnnouncements = useRef(new Set<string>());
+  const [notificationRevision, setNotificationRevision] = useState(0);
+  useEffect(() => listenForNotificationChanges(() => setNotificationRevision((n) => n + 1)), []);
   const [feedbackId, setFeedbackId] = useState<string | null>(null);
   const feedbackAfterLogin = useRef(false);
   const [theme, setTheme] = useState<"light" | "dark">(initialTheme);
@@ -225,8 +224,7 @@ export default function App() {
   const [publishingIntent, setPublishingIntent] = useState<Intent | null>(null);
   const [pendingConversation, setPendingConversation] = useState(currentConversation);
   const consumeConversation = useCallback(() => setPendingConversation(null), []);
-  const [notices, setNotices] = useState<Notice[]>([]),
-    [prefill, setPrefill] = useState<Wanted | null>(null);
+  const [prefill, setPrefill] = useState<Wanted | null>(null);
   const [noticeIntent, setNoticeIntent] = useState<Intent | null>(null);
   const [chatItem, setChatItem] = useState<Item | null>(null),
     [chatDraft, setChatDraft] = useState("");
@@ -379,25 +377,6 @@ export default function App() {
         .catch(() => {});
   }, [revision]);
   useEffect(() => {
-    if (!user) {
-      setNotices([]);
-      return;
-    }
-    let alive = true;
-    const read = () =>
-      api<Notice[]>("/notifications/")
-        .then((n) => {
-          if (alive) setNotices(n);
-        })
-        .catch(() => {});
-    void read();
-    const id = window.setInterval(read, 10000);
-    return () => {
-      alive = false;
-      clearInterval(id);
-    };
-  }, [user, revision]);
-  useEffect(() => {
     const id = new URLSearchParams(location.search).get("item");
     if (id)
       api<Item>("/items/" + encodeURIComponent(id))
@@ -478,15 +457,6 @@ export default function App() {
     }
     return true;
   };
-  const markAnnouncementRead = useCallback((id: string) => {
-    if (!user) return;
-    const key = `${user.id}:${id}`;
-    if (seenAnnouncements.current.has(key)) return;
-    seenAnnouncements.current.add(key);
-    void api("/announcements/mark-read", "POST", { ids: [id] })
-      .then(() => setAnnouncementRevision((v) => v + 1))
-      .catch(() => { seenAnnouncements.current.delete(key); });
-  }, [user]);
   function signedIn(account: User) {
     setSessionExpired(false);
     setSessionEpoch((n) => n + 1);
@@ -543,8 +513,10 @@ export default function App() {
       setDetailFromChat(fromChat);
       setSelected(fresh);
       setModal("detail");
+      return true;
     } catch (e) {
       setToast((e as Error).message);
+      return false;
     }
   }
   function favorite(item: Item) {
@@ -652,41 +624,39 @@ export default function App() {
     view === "wanted",
   );
   const myWanted = useResource<Wanted[]>("/wanted/?mine=true", revision, view === "mywanted");
-  const conversations = useResource<Conversation[]>("/conversations", revision, !!user, true);
+  const noticeRevision = revision + notificationRevision;
+  const conversations = useResource<Conversation[]>("/conversations", noticeRevision, !!user, true, user?.id);
+  const noticeResource = useResource<Notice[]>("/notifications/?unread_only=true", noticeRevision, !!user, true, user?.id);
+  const notices = noticeResource.data ?? [];
+  const summary = useResource<{ total: number; chat: number; pending_sale_feedback: number }>(
+    "/notification-summary", noticeRevision, !!user, true, user?.id);
   const profileOverview = useResource<{ intents: number; listings: number; favorites: number; wanted: number }>(
     "/users/me/overview", revision, view === "profile" && !!user,
   );
   const taskNotices = useResource<Notice[]>(
     `/notifications/?intent_id=${encodeURIComponent(noticeIntent?.id ?? "")}`,
-    revision,
+    noticeRevision,
     modal === "notifications" && !!noticeIntent && !!user,
     true,
+    user?.id,
   );
   const saleFeedback = useResource<{ id: string; status: string; created_at: string }[]>(
     `/items/${selected?.id ?? ""}/sale-feedback`, revision,
     modal === "detail" && !!selected?.is_owner && !!selected?.sale_feedback_count,
   );
   const saleFeedbackMine = useResource<SaleFeedbackNotice[]>(
-    "/sale-feedback/my", revision, !!user, true,
-  );
-  const announcements = useResource<Announcement[]>(
-    "/announcements", revision, true,
-  );
-  const announcementUnread = useResource<{ count: number }>(
-    "/announcements/unread", revision + announcementRevision, !!user, true,
+    "/sale-feedback/my", noticeRevision, !!user, true, user?.id,
   );
   const siteFeedbackNotices = useResource<FeedbackNotices>(
-    "/feedback-notices", revision, !!user, true,
+    "/feedback-notices", noticeRevision, !!user, true, user?.id,
   );
   const openFeedback = (id: string | null = null) => { setFeedbackId(id); setModal("feedback"); };
   const visibleNotices = noticeIntent
     ? (taskNotices.data ?? []).filter((n) => n.intent_id === noticeIntent.id)
     : notices;
-  const unread = notices.filter((n) => !n.is_read).length;
-  const chatUnread = (conversations.data ?? []).reduce((sum, c) => sum + c.unread_count, 0);
-  const feedbackUnread = (saleFeedbackMine.data ?? []).length;
-  const announcementUnreadCount = announcementUnread.data?.count ?? 0;
-  const allUnread = unread + chatUnread + feedbackUnread + announcementUnreadCount + (siteFeedbackNotices.data?.count ?? 0);
+  const chatUnread = summary.data?.chat ?? 0;
+  const feedbackPending = summary.data?.pending_sale_feedback ?? 0;
+  const allUnread = summary.data?.total ?? 0;
   const personalView = ["profile", "intents", "messages", "favorites", "mine", "mywanted"].includes(view);
   const adminView = ["admin", "admin-chat", "admin-reports", "admin-logs", "admin-feedback", "admin-metrics"].includes(view);
 
@@ -2083,23 +2053,21 @@ export default function App() {
                   ))}
                 </section>
               )}
-              {(announcements.data ?? []).length > 0 && (
                 <section className="notice-group">
                   <h3 className="notice-group-title">公告与更新</h3>
-                  {(announcements.data ?? []).slice(0, 3).map((a) => (
-                    <AnnouncementEntry key={a.id} announcement={a} compact onSeen={markAnnouncementRead} />
-                  ))}
+                  <AnnouncementFeed key={user?.id ?? "guest"} userId={user?.id} revision={noticeRevision} compact />
                   <button
                     className="text-button"
                     onClick={() => {
                       setModal("announcements");
                     }}
                   >
-                    查看全部公告
+                    历史公告
                     <ArrowRight size={14} />
                   </button>
                 </section>
-              )}
+              {[summary.error, noticeResource.error, conversations.error, saleFeedbackMine.error, siteFeedbackNotices.error].filter(Boolean).length > 0 &&
+                <p className="form-error" role="alert">部分通知暂时未能刷新。<button type="button" className="text-button" onClick={refresh}>重试</button></p>}
               {chatUnread > 0 && (
                 <section className="notice-group">
                   <h3 className="notice-group-title">站内新消息</h3>
@@ -2116,7 +2084,11 @@ export default function App() {
                           className="text-button"
                           onClick={() => {
                             setModal(null);
-                            navigate("messages");
+                            location.hash = `messages/${c.id}`;
+                            setView("messages");
+                            setChatItem(null);
+                            setChatDraft("");
+                            setPendingConversation(c.id);
                           }}
                         >
                           去查看
@@ -2126,14 +2098,14 @@ export default function App() {
                     ))}
                 </section>
               )}
-              {feedbackUnread > 0 && (
+              {feedbackPending > 0 && (
                 <section className="notice-group">
-                  <h3 className="notice-group-title">买家反馈已售</h3>
+                  <h3 className="notice-group-title">买家反馈已售 · {feedbackPending} 条待处理</h3>
                   {(saleFeedbackMine.data ?? []).map((f) => (
-                    <article className="notice unread" key={f.id}>
+                    <article className={`notice ${f.is_read ? "" : "unread"}`} key={f.id}>
                       <ProductArt item={f.item} />
                       <div>
-                        <span className="task-status">反馈已售</span>
+                        <span className="task-status">{f.is_read ? "已读 · 待处理" : "未读 · 反馈已售"}</span>
                         <h3>{f.item.title}</h3>
                         <p>
                           {f.reporter?.nickname ?? "买家"}反馈该商品可能已售，请核实。
@@ -2141,9 +2113,8 @@ export default function App() {
                       </div>
                       <button
                         className="text-button"
-                        onClick={() => {
-                          setModal(null);
-                          void openItem(f.item);
+                        onClick={async () => {
+                          if (await openItem(f.item) && !f.is_read) void operate(() => api(`/sale-feedback/${f.id}/read`, "POST"));
                         }}
                       >
                         去处理
@@ -2159,7 +2130,7 @@ export default function App() {
                   <div className="notice-list">{notices.map(renderNotice)}</div>
                 </section>
               )}
-              {allUnread === 0 && (
+              {user && summary.data && allUnread === 0 && !summary.error && (
                 <Empty
                   title="暂时没有新消息"
                   text="有新消息、匹配结果或买家反馈时会在这里提醒你。"
@@ -2225,15 +2196,7 @@ export default function App() {
       )}
       {modal === "announcements" && (
         <Modal title="公告与更新" onClose={() => setModal(null)}>
-          {(announcements.data ?? []).length ? (
-            <div className="announcement-list">
-              {(announcements.data ?? []).map((a) => (
-                <AnnouncementEntry key={a.id} announcement={a} onSeen={markAnnouncementRead} />
-              ))}
-            </div>
-          ) : (
-            <Empty title="暂无公告" text="有新的公告和更新时会显示在这里。" />
-          )}
+          <AnnouncementFeed key={user?.id ?? "guest"} userId={user?.id} revision={noticeRevision} />
         </Modal>
       )}
       {modal === "detail" && selected && (
@@ -2241,18 +2204,7 @@ export default function App() {
           {detailFromChat && <button type="button" className="text-button detail-chat-back" onClick={() => setModal(null)}><ChevronLeft size={16} />返回聊天</button>}
           <div className="detail-grid">
             <div>
-              <ProductArt item={selected} />
-              {selected.images.length > 1 && (
-                <div className="detail-photos">
-                  {selected.images.slice(1).map((url) => (
-                    <img
-                      key={url}
-                      src={url}
-                      alt={`${selected.title}的补充照片`}
-                    />
-                  ))}
-                </div>
-              )}
+              <ProductGallery key={selected.id} item={selected} />
               {selected.is_demo && (
                 <p className="hint">演示商品插画，不代表真实在售商品。</p>
               )}

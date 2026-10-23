@@ -27,6 +27,9 @@ from prometheus_client.core import GaugeMetricFamily
 
 from .config import ROOT, Settings
 from .feedback import register_feedback
+from .notification_center import register_notification_center
+from .vision import register_vision
+from .draft_batches import register_draft_batches
 from .schemas import AnnouncementReadRequest
 from .chat_email import ChatEmailRunner
 from .database import prepare_database, retire_demo_data
@@ -39,8 +42,8 @@ from .retention import prune_chat
 from .needs import apply_wanted, backfill_wanted, sync_wanted, wanted_query
 from .models import ActionLog, Announcement, AnnouncementRead, ChatAttachment, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PageDwellLog, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, VisitorEvent, Wanted, now, uid
 from .password_auth import DUMMY_HASH, hash_password, new_password_error, verify_password
-from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, DwellReport, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, SmartSearchIn, StatusChange, WantedCreate, WantedUpdate
-from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, parse_local, seed
+from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, DwellReport, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, SmartSearchIn, StatusChange, WantedCreate, WantedParseRequest, WantedUpdate
+from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, parse_local, parse_wanted, seed
 
 SESSION_IDLE = timedelta(days=7)
 SESSION_MAX_AGE = timedelta(days=30)
@@ -230,6 +233,7 @@ def create_app(settings: Settings | None = None):
                 pass
             matching.stop()
             chat_email.stop()
+            await app.state.vision.close()
             engine.dispose()
 
     app = FastAPI(title='燕渡 API', version='0.1.0', lifespan=lifespan)
@@ -442,6 +446,7 @@ def create_app(settings: Settings | None = None):
                 'chat_email_ready': settings.chat_email_ready,
                 'demo_mode': settings.demo_mode, 'ai_mode': settings.ai_mode, 'embedding_mode': settings.embedding_mode,
                 'email_auth_ready': settings.email_auth_ready,
+                'vision_enabled': settings.vision_enabled,
                 'active_items': db.scalar(select(func.count()).select_from(Item).where(Item.status == 'ACTIVE'))}
 
     @app.get('/api/v1/announcements')
@@ -450,6 +455,10 @@ def create_app(settings: Settings | None = None):
                           .order_by(Announcement.created_at.desc()).limit(50)).all()
         return [{'id': a.id, 'title': a.title, 'body': a.body, 'kind': a.kind,
                  'created_at': iso(a.created_at)} for a in rows]
+
+    register_notification_center(app, get_db, current_user, require_user, mutation_lock)
+    register_vision(app, get_db, require_user, settings)
+    register_draft_batches(app, get_db, require_user, settings, mutation_lock, draft_out, item_out, matching)
 
     @app.get('/api/v1/announcements/unread')
     def announcements_unread(db: Session = Depends(get_db), user: User = Depends(require_user)):
@@ -746,8 +755,9 @@ def create_app(settings: Settings | None = None):
 
     @app.get('/api/v1/conversations')
     def conversations(db: Session = Depends(get_db), user=Depends(require_user)):
+        unread = select(ChatMessage.conversation_id).where(ChatMessage.sender_id != user.id, ChatMessage.read_at.is_(None))
         rows = db.scalars(select(Conversation).where(or_(Conversation.buyer_id == user.id, Conversation.seller_id == user.id))
-                          .order_by(Conversation.last_message_at.desc()).limit(100)).all()
+                          .order_by(Conversation.id.in_(unread).desc(), Conversation.last_message_at.desc()).limit(100)).all()
         return [conversation_out(db, row, user) for row in rows]
 
     @app.get('/api/v1/conversations/{conversation_id}')
@@ -799,10 +809,12 @@ def create_app(settings: Settings | None = None):
             return message_out(message, db)
 
     @app.post('/api/v1/conversations/{conversation_id}/read')
-    def read_conversation(conversation_id: str, db: Session = Depends(get_db), user=Depends(require_user)):
+    def read_conversation(conversation_id: str, data: AnnouncementReadRequest,
+                          db: Session = Depends(get_db), user=Depends(require_user)):
         owned_conversation(db, conversation_id, user)
         db.execute(update(ChatMessage).where(ChatMessage.conversation_id == conversation_id,
-                   ChatMessage.sender_id != user.id, ChatMessage.read_at.is_(None)).values(read_at=now()))
+                   ChatMessage.sender_id != user.id, ChatMessage.id.in_(data.ids),
+                   ChatMessage.read_at.is_(None)).values(read_at=now()))
         db.commit()
         return {'ok': True}
 
@@ -1308,10 +1320,10 @@ def create_app(settings: Settings | None = None):
     def my_sale_feedback(db: Session = Depends(get_db), user=Depends(require_user)):
         rows = db.scalars(select(SaleFeedback).join(Item, Item.id == SaleFeedback.item_id)
                           .where(Item.seller_id == user.id, SaleFeedback.status == 'OPEN')
-                          .order_by(SaleFeedback.created_at.desc()).limit(100)).all()
+                          .order_by(SaleFeedback.read_at.is_(None).desc(), SaleFeedback.created_at.desc()).limit(100)).all()
         return [{'id': r.id, 'item': item_out(db.get(Item, r.item_id), db, user),
                  'reporter': user_out(db.get(User, r.reporter_id)),
-                 'created_at': iso(r.created_at)} for r in rows]
+                 'created_at': iso(r.created_at), 'is_read': r.read_at is not None} for r in rows]
 
     @app.post('/api/v1/items/{item_id}/sale-feedback/{feedback_id}/review')
     def review_sale_feedback(item_id: str, feedback_id: str, data: DealAction,
@@ -1497,8 +1509,11 @@ def create_app(settings: Settings | None = None):
         return {'ok': True}
 
     @app.get('/api/v1/notifications/')
-    def notifications(intent_id: str | None = None, db: Session = Depends(get_db), user=Depends(require_user)):
+    def notifications(intent_id: str | None = None, unread_only: bool = False,
+                      db: Session = Depends(get_db), user=Depends(require_user)):
         query = select(Notification).where(Notification.buyer_id == user.id, Notification.verdict != 'NO_MATCH')
+        if unread_only:
+            query = query.where(Notification.is_read == False)
         if intent_id is not None:
             owned_intent(db, intent_id, user)
             query = query.where(Notification.intent_id == intent_id)
@@ -1565,6 +1580,10 @@ def create_app(settings: Settings | None = None):
         query = query.where(*keyword_filters(q, Wanted.title, Wanted.description))
         rows = db.scalars(query.order_by(Wanted.created_at.desc()).limit(100))
         return [wanted_out(w, db, user) for w in rows]
+
+    @app.post('/api/v1/wanted/parse')
+    def parse_wanted_fields(data: WantedParseRequest, db: Session = Depends(get_db), user=Depends(require_user)):
+        return {'parsed': parse_wanted(data.raw, settings), 'mode': settings.ai_mode}
 
     @app.post('/api/v1/wanted/', status_code=201)
     def wanted_create(data: WantedCreate, db: Session = Depends(get_db), user=Depends(require_user)):

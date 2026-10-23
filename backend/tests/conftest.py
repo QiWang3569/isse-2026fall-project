@@ -22,6 +22,9 @@ def isolate_local_environment(monkeypatch):
                  'CHAT_EMAIL_ENABLED', 'PUBLIC_APP_URL', 'CHAT_EMAIL_DELAY_SECONDS',
                  'CHAT_EMAIL_COOLDOWN_SECONDS'):
         monkeypatch.delenv(name, raising=False)
+    for name in ('VISION_ENABLED', 'VISION_API_KEY', 'VISION_BASE_URL', 'VISION_MODEL',
+                 'VISION_THINKING', 'VISION_TIMEOUT_SECONDS', 'VISION_HOURLY_LIMIT'):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture

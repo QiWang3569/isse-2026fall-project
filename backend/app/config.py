@@ -25,6 +25,13 @@ class Settings:
     deepseek_url: str = field(default_factory=lambda: os.getenv('DEEPSEEK_BASE_URL', 'https://api.deepseek.com'))
     deepseek_model: str = field(default_factory=lambda: os.getenv('DEEPSEEK_MODEL', 'deepseek-chat'))
     model_thinking: str | None = field(default_factory=lambda: os.getenv('MODEL_THINKING'))
+    vision_enabled: bool = field(default_factory=lambda: os.getenv('VISION_ENABLED', 'false').lower() == 'true')
+    vision_key: str = field(default_factory=lambda: os.getenv('VISION_API_KEY', ''), repr=False)
+    vision_url: str = field(default_factory=lambda: os.getenv('VISION_BASE_URL', 'https://api.qnaigc.com/v1'))
+    vision_model: str = field(default_factory=lambda: os.getenv('VISION_MODEL', 'qwen/qwen3.7-flash'))
+    vision_thinking: str | None = field(default_factory=lambda: os.getenv('VISION_THINKING', 'disabled') or None)
+    vision_timeout: float = field(default_factory=lambda: float(os.getenv('VISION_TIMEOUT_SECONDS', '30')))
+    vision_hourly_limit: int = field(default_factory=lambda: int(os.getenv('VISION_HOURLY_LIMIT', '20')))
     embedding_key: str = field(default_factory=lambda: os.getenv('EMBEDDING_API_KEY', ''))
     embedding_url: str = field(default_factory=lambda: os.getenv('EMBEDDING_BASE_URL', 'https://api.openai.com/v1'))
     embedding_model: str = field(default_factory=lambda: os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small'))
@@ -42,6 +49,16 @@ class Settings:
     chat_email_cooldown_seconds: int = field(default_factory=lambda: int(os.getenv('CHAT_EMAIL_COOLDOWN_SECONDS', '1800')))
 
     def __post_init__(self):
+        if self.vision_enabled and not self.vision_key.strip():
+            raise ValueError('Vision publishing requires VISION_API_KEY')
+        vision_url = urlparse(self.vision_url)
+        if (vision_url.scheme != 'https' or not vision_url.hostname or vision_url.port == 0 or vision_url.username
+                or vision_url.password or vision_url.query or vision_url.fragment):
+            raise ValueError('VISION_BASE_URL must be an HTTPS API URL')
+        if not self.vision_model.strip() or self.vision_thinking not in {None, 'enabled', 'disabled'}:
+            raise ValueError('Set VISION_MODEL and a valid VISION_THINKING (enabled, disabled or empty)')
+        if not 1 <= self.vision_timeout <= 60 or not 1 <= self.vision_hourly_limit <= 100:
+            raise ValueError('Vision timeout must be 1–60 seconds; hourly limit must be 1–100')
         if self.app_env not in {'local', 'production'}:
             raise ValueError('APP_ENV must be local or production')
         if self.ai_mode not in {'local', 'remote'}:

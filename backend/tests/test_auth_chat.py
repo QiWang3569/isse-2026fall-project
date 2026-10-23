@@ -109,7 +109,7 @@ def test_chat_is_private_persistent_and_tracks_read_state(client, app):
     assert client.post(f'/api/v1/conversations/{conversation_id}/messages', json={'body': '窥探'}).status_code == 404
     login(client, 'seller')
     assert client.get('/api/v1/conversations').json()[0]['unread_count'] == 1
-    assert client.post(f'/api/v1/conversations/{conversation_id}/read').status_code == 200
+    assert client.post(f'/api/v1/conversations/{conversation_id}/read', json={'ids': [started.json()['message']['id']]}).status_code == 200
     assert client.get('/api/v1/conversations').json()[0]['unread_count'] == 0
     assert client.post(f'/api/v1/conversations/{conversation_id}/messages', json={'body': '还在，可以当面看。'}).status_code == 201
     login(client, 'buyer')

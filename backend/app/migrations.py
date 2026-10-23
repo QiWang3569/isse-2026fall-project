@@ -34,6 +34,7 @@ def upgrade_buyer_agent(engine):
                          'completed_item_id': 'VARCHAR(36)'},
         'conversations': {'deal_status': "VARCHAR(20) NOT NULL DEFAULT 'NONE'"},
         'chat_messages': {'hidden_at': 'TIMESTAMP'},
+        'sale_feedback': {'read_at': 'TIMESTAMP'},
         'match_notifications': {'verdict': "VARCHAR(20) NOT NULL DEFAULT 'MATCH'",
                                 'questions': "JSON NOT NULL DEFAULT '[]'",
                                 'evidence': "JSON NOT NULL DEFAULT '[]'",
