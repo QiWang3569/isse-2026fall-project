@@ -29,6 +29,7 @@ from .config import ROOT, Settings
 from .feedback import register_feedback
 from .notification_center import register_notification_center
 from .vision import register_vision
+from .draft_batches import register_draft_batches
 from .schemas import AnnouncementReadRequest
 from .chat_email import ChatEmailRunner
 from .database import prepare_database, retire_demo_data
@@ -457,6 +458,7 @@ def create_app(settings: Settings | None = None):
 
     register_notification_center(app, get_db, current_user, require_user, mutation_lock)
     register_vision(app, get_db, require_user, settings)
+    register_draft_batches(app, get_db, require_user, settings, mutation_lock, draft_out, item_out, matching)
 
     @app.get('/api/v1/announcements/unread')
     def announcements_unread(db: Session = Depends(get_db), user: User = Depends(require_user)):
