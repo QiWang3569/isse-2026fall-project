@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from .buyer_agent import ModelUnavailable, chat_json
 from .config import Settings
 from .models import ActionLog, Announcement, Intent, Item, User, Wanted, now
-from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, ParsedIntent, ParsedItem
+from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, ParsedIntent, ParsedItem, ParsedWanted
 
 # Canonical feature words keep local demo behavior explainable; this is not an LLM.
 FEATURES = {
@@ -142,6 +142,20 @@ def parse_item(raw: str, settings: Settings) -> ParsedItem:
         return ParsedItem.model_validate(chat_json(system, {'description': raw}, settings))
     except (ModelUnavailable, ValueError, TypeError):
         return parse_item_local(raw)
+
+
+def parse_wanted(raw: str, settings: Settings) -> ParsedWanted:
+    try:
+        parsed = parse_intent(raw, settings)
+    except HTTPException:
+        parsed = parse_local(raw)
+    if parsed.keywords:
+        title = '求购' + '、'.join(parsed.keywords[:4])
+    else:
+        title = re.split(r'[，。；！？,.;!?]', raw.strip())[0].strip()[:120] or '求购'
+    return ParsedWanted(title=title[:120], description=raw, category=parsed.category,
+                        budget=parsed.max_price, campus=parsed.campus,
+                        clarification=parsed.clarification)
 
 
 def embed(text: str, settings: Settings) -> list[float] | None:

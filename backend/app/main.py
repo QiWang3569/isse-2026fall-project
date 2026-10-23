@@ -42,8 +42,8 @@ from .retention import prune_chat
 from .needs import apply_wanted, backfill_wanted, sync_wanted, wanted_query
 from .models import ActionLog, Announcement, AnnouncementRead, ChatAttachment, ChatMessage, ChatReport, Conversation, EmailChallenge, Favorite, Intent, Item, ItemDraft, LoginSession, MatchJob, Notification, PageDwellLog, PasswordAttempt, Report, SaleFeedback, Upload, User, UserBlock, VisitorEvent, Wanted, now, uid
 from .password_auth import DUMMY_HASH, hash_password, new_password_error, verify_password
-from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, DwellReport, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, SmartSearchIn, StatusChange, WantedCreate, WantedUpdate
-from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, parse_local, seed
+from .schemas import CAMPUSES, CATEGORIES, CONDITIONS, AnnouncementCreate, AnnouncementUpdate, ChatMessageCreate, ChatReportCreate, ChatReviewAction, DealAction, DemoLogin, DwellReport, EmailCodeRequest, EmailCodeVerify, IntentChange, IntentComplete, IntentCreate, ItemCreate, ItemDraftImport, ItemDraftUpdate, ItemParseRequest, ItemUpdate, PasswordLogin, PasswordSet, ProfileUpdate, QueryIn, ReportCreate, ReviewAction, SmartSearchIn, StatusChange, WantedCreate, WantedParseRequest, WantedUpdate
+from .services import FEATURES, assess_report, embed, log, model_name, normalize, parse_intent, parse_item, parse_local, parse_wanted, seed
 
 SESSION_IDLE = timedelta(days=7)
 SESSION_MAX_AGE = timedelta(days=30)
@@ -1580,6 +1580,10 @@ def create_app(settings: Settings | None = None):
         query = query.where(*keyword_filters(q, Wanted.title, Wanted.description))
         rows = db.scalars(query.order_by(Wanted.created_at.desc()).limit(100))
         return [wanted_out(w, db, user) for w in rows]
+
+    @app.post('/api/v1/wanted/parse')
+    def parse_wanted_fields(data: WantedParseRequest, db: Session = Depends(get_db), user=Depends(require_user)):
+        return {'parsed': parse_wanted(data.raw, settings), 'mode': settings.ai_mode}
 
     @app.post('/api/v1/wanted/', status_code=201)
     def wanted_create(data: WantedCreate, db: Session = Depends(get_db), user=Depends(require_user)):

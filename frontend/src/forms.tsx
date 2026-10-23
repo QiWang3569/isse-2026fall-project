@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, Check, ImagePlus, Sparkles, Trash2, X } from "lucide-react";
-import { api, type Meta, type Parsed, type ParsedItem, type Item, type ItemDraft, type Wanted, type Intent } from "./api";
+import { api, type Meta, type Parsed, type ParsedItem, type ParsedWanted, type Item, type ItemDraft, type Wanted, type Intent } from "./api";
 import { VisionPublisher } from "./VisionPublisher";
 import { VisionBatchImporter } from "./VisionBatchImporter";
 
@@ -700,18 +700,50 @@ export function WantedForm({
 }: Common & { initial: string; editingWanted?: Wanted | null; initialIntent?: Intent | null }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [parsing, setParsing] = useState(false);
+  const [raw, setRaw] = useState("");
+  const [title, setTitle] = useState(editingWanted?.title || initialIntent?.raw_query.split("\n")[0].slice(0, 120) || initial || "");
+  const [description, setDescription] = useState(editingWanted?.description ?? initialIntent?.raw_query ?? "");
+  const [category, setCategory] = useState(editingWanted?.category || initialIntent?.category || "");
+  const [budget, setBudget] = useState(editingWanted?.budget != null ? String(editingWanted.budget) : initialIntent?.max_price != null ? String(initialIntent.max_price) : "");
+  const [campus, setCampus] = useState(editingWanted?.campus || initialIntent?.campus || "不限校区");
+
+  async function smartFill() {
+    if (raw.trim().length < 2) {
+      setError("请先输入一段求购描述");
+      return;
+    }
+    setParsing(true);
+    setError("");
+    try {
+      const result = await api<{ parsed: ParsedWanted }>("/wanted/parse", "POST", {
+        raw: raw.trim(),
+      });
+      const p = result.parsed;
+      if (p.title) setTitle(p.title);
+      if (p.description) setDescription(p.description);
+      if (p.category) setCategory(p.category);
+      if (p.budget != null) setBudget(String(p.budget));
+      if (p.campus) setCampus(p.campus);
+      if (p.clarification) setError(p.clarification);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setParsing(false);
+    }
+  }
+
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
     setError("");
     try {
-      const data = new FormData(e.currentTarget);
       const payload = {
-        title: data.get("title"),
-        description: data.get("description"),
-        category: data.get("category") || null,
-        budget: data.get("budget") === "" ? null : Number(data.get("budget")),
-        campus: data.get("campus"),
+        title: title.trim(),
+        description: description.trim(),
+        category: category || null,
+        budget: budget === "" ? null : Number(budget),
+        campus,
         ...(!editingWanted && initialIntent ? { intent_id: initialIntent.id } : {}),
       };
       if (editingWanted) {
@@ -731,31 +763,56 @@ export function WantedForm({
       <p className="muted">
         发布到求购看板的同时，燕渡会自动替你代蹲。已有代蹲会沿用原来的匹配记录。
       </p>
+      <div className="form-callout">
+        <Sparkles size={22} />
+        <p>
+          一句话说出你想收的东西，点“智能识别并填充”，信息会自动填好，确认后即可发布。
+        </p>
+      </div>
+      <label>
+        一句话描述求购
+        <textarea
+          value={raw}
+          onChange={(e) => setRaw(e.target.value)}
+          maxLength={2500}
+          rows={2}
+          placeholder="例如：求一台九成新 iPad，预算 2000 元，燕园面交"
+        />
+      </label>
+      <button
+        type="button"
+        className="button secondary"
+        disabled={parsing || busy}
+        onClick={() => void smartFill()}
+      >
+        <Sparkles size={16} />
+        {parsing ? "识别中…" : "智能识别并填充"}
+      </button>
       <label>
         你想求购什么？
         <input
-          name="title"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
           required
           minLength={2}
           maxLength={120}
-          defaultValue={editingWanted?.title || initialIntent?.raw_query.split("\n")[0].slice(0, 120) || initial}
           placeholder="求一本离散数学教材"
         />
       </label>
       <label>
         具体要求
         <textarea
-          name="description"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
           maxLength={2500}
           rows={3}
-          defaultValue={editingWanted?.description ?? initialIntent?.raw_query}
           placeholder="型号、版本、能接受的成色、交接时间…"
         />
       </label>
       <div className="form-grid">
         <label>
           物品分类
-          <select name="category" defaultValue={editingWanted?.category || initialIntent?.category || ""}>
+          <select value={category} onChange={(e) => setCategory(e.target.value)}>
             <option value="">不限分类</option>
             {meta.categories.map((c) => (
               <option key={c}>{c}</option>
@@ -765,18 +822,18 @@ export function WantedForm({
         <label>
           最高预算（元）
           <input
-            name="budget"
             type="number"
             min="0"
             max="999999"
             step="0.01"
-            defaultValue={editingWanted?.budget ?? initialIntent?.max_price ?? ""}
+            value={budget}
+            onChange={(e) => setBudget(e.target.value)}
             placeholder="不限预算"
           />
         </label>
         <label>
           交接校区
-          <select name="campus" defaultValue={editingWanted?.campus || initialIntent?.campus || "不限校区"}>
+          <select value={campus} onChange={(e) => setCampus(e.target.value)}>
             {meta.campuses.map((c) => (
               <option key={c}>{c}</option>
             ))}
@@ -789,7 +846,7 @@ export function WantedForm({
           {error}
         </p>
       )}
-      <button className="button primary full" disabled={busy}>
+      <button className="button primary full" disabled={busy || parsing}>
         {busy
           ? editingWanted
             ? "保存中…"

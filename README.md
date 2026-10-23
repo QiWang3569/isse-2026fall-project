@@ -12,8 +12,8 @@
 [![Node.js 22](https://img.shields.io/badge/Node.js-22-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
 [![PostgreSQL 16 + pgvector](https://img.shields.io/badge/PostgreSQL-16%2Bpgvector-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![tests](https://img.shields.io/badge/tests-210%20passed-brightgreen)](#测试与覆盖率)
-[![coverage](https://img.shields.io/badge/coverage-93%25-2ea44f)](#测试与覆盖率)
+[![tests](https://img.shields.io/badge/tests-287%20passed-brightgreen)](#测试与覆盖率)
+[![coverage](https://img.shields.io/badge/coverage-94%25-2ea44f)](#测试与覆盖率)
 
 > 本仓库已转为公开（public）。请勿把本地 `.env`、数据库、图片或密钥提交到仓库。
 
@@ -81,7 +81,7 @@ flowchart LR
 
 - 必须条件、排除项、偏好三组解析；本地关键词召回或远程模型精筛，并给出匹配理由与待确认问题。
 - 后台任务持久化、自动重试、手动重试、重启恢复；通知去重与已读状态。
-- 发布求购自动关联代蹲，修改 / 暂停 / 结束状态双向同步；私密代蹲可发布到公开看板。
+- 发布求购支持自然语言智能填充（标题、分类、预算、校区），并自动关联代蹲，修改 / 暂停 / 结束状态双向同步；私密代蹲可发布到公开看板。
 
 ### 站内聊天、反馈与交易
 
@@ -195,7 +195,7 @@ npm ci
 npm run build
 ```
 
-最新一次本地运行：217 项测试全部通过；此前 210 项测试对应的整体行覆盖率为 93%，本次未重新测量覆盖率。GitHub Actions 会在推送与合并请求时，分别在 Windows 与 Linux 上执行后端测试和前端构建，结果见 [Actions](https://github.com/QiWang3569/yandu/actions)。
+最新一次本地运行：287 项后端测试全部通过，整体行覆盖率 94%；前端通过 TypeScript 类型检查与 Vite 生产构建。GitHub Actions 会在推送与合并请求时，分别在 Windows 与 Linux 上执行后端测试和前端构建，结果见 [Actions](https://github.com/QiWang3569/yandu/actions)。
 
 ## 部署
 

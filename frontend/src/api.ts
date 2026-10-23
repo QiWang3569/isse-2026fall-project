@@ -115,6 +115,14 @@ export type ParsedItem = {
   tags: string[];
   clarification: string | null;
 };
+export type ParsedWanted = {
+  title: string | null;
+  description: string | null;
+  category: string | null;
+  budget: number | null;
+  campus: string;
+  clarification: string | null;
+};
 export type Intent = Parsed & {
   id: string;
   raw_query: string;
