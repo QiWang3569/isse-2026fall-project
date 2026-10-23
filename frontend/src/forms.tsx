@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, Check, ImagePlus, Sparkles, Trash2, X } from "lucide-react";
 import { api, type Meta, type Parsed, type ParsedItem, type Item, type ItemDraft, type Wanted, type Intent } from "./api";
+import { VisionPublisher } from "./VisionPublisher";
 
 type Common = { meta: Meta; onDone: () => void };
 const MAX_ITEM_IMAGES = 9;
@@ -444,7 +445,7 @@ export function PublishForm({
     }
   }
   return (
-    <form className="stack-form" onSubmit={submit}>
+    <form className="stack-form publish-form" onSubmit={submit}>
       {draft && onBack && <button type="button" className="text-button" onClick={onBack}>
         <ArrowLeft size={15} /> 返回待发布列表
       </button>}
@@ -518,6 +519,14 @@ export function PublishForm({
         <p className="hint" aria-live="polite">已上传 {images.length}/9 张，还可添加 {MAX_ITEM_IMAGES - images.length} 张{uploadProgress && ` · ${uploadProgress}`}</p>
         {uploadError && <p className="form-error" role="alert">{uploadError}</p>}
       </div>
+      {meta.vision_enabled && <VisionPublisher images={images} categories={meta.categories}
+        values={{ title, description, category, tags }} disabled={busy || uploading || parsing}
+        onApply={(values) => {
+          if (values.title !== undefined) setTitle(values.title);
+          if (values.description !== undefined) setDescription(values.description);
+          if (values.category !== undefined) setCategory(values.category);
+          if (values.tags !== undefined) setTags(values.tags);
+        }} />}
       <label>
         给好物起个名字
         <input

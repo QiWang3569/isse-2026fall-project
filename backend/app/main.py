@@ -28,6 +28,7 @@ from prometheus_client.core import GaugeMetricFamily
 from .config import ROOT, Settings
 from .feedback import register_feedback
 from .notification_center import register_notification_center
+from .vision import register_vision
 from .schemas import AnnouncementReadRequest
 from .chat_email import ChatEmailRunner
 from .database import prepare_database, retire_demo_data
@@ -231,6 +232,7 @@ def create_app(settings: Settings | None = None):
                 pass
             matching.stop()
             chat_email.stop()
+            await app.state.vision.close()
             engine.dispose()
 
     app = FastAPI(title='燕渡 API', version='0.1.0', lifespan=lifespan)
@@ -443,6 +445,7 @@ def create_app(settings: Settings | None = None):
                 'chat_email_ready': settings.chat_email_ready,
                 'demo_mode': settings.demo_mode, 'ai_mode': settings.ai_mode, 'embedding_mode': settings.embedding_mode,
                 'email_auth_ready': settings.email_auth_ready,
+                'vision_enabled': settings.vision_enabled,
                 'active_items': db.scalar(select(func.count()).select_from(Item).where(Item.status == 'ACTIVE'))}
 
     @app.get('/api/v1/announcements')
@@ -453,6 +456,7 @@ def create_app(settings: Settings | None = None):
                  'created_at': iso(a.created_at)} for a in rows]
 
     register_notification_center(app, get_db, current_user, require_user, mutation_lock)
+    register_vision(app, get_db, require_user, settings)
 
     @app.get('/api/v1/announcements/unread')
     def announcements_unread(db: Session = Depends(get_db), user: User = Depends(require_user)):
